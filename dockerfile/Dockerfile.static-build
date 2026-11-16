@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+
+# ── ETAPA 1: build ───────────────────────────────────────────
+# Node, npm y node_modules SOLO existen aquí; no llegan a la imagen final.
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS build
+WORKDIR /app
+
+# Primero solo los manifiestos → la capa de dependencias se cachea
+COPY package.json package-lock.json ./
+# npm ci: instala EXACTAMENTE lo del lockfile (reproducible, falla si no cuadra)
+# --ignore-scripts: los paquetes no ejecutan scripts al instalarse (vector de supply chain).
+#   Si algún paquete los necesita y el build falla, quitarlo.
+RUN npm ci --ignore-scripts
+
+# Luego el código (copiar solo lo que el build necesita)
+COPY index.html vite.config.js ./
+COPY src ./src
+COPY public ./public
+RUN npm run build
+# Si el build necesita un token (registry privado...) → NUNCA ARG/ENV:
+#   RUN --mount=type=secret,id=npm_token NPM_TOKEN=$(cat /run/secrets/npm_token) npm ci
+
+# ── ETAPA 2: imagen final = Dockerfile.static, pero copiando dist/ ──
+FROM nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
+
+USER root
+
+# hadolint ignore=DL3018
+RUN apk upgrade --no-cache \
+ && apk add --no-cache tzdata \
+ && cp /usr/share/zoneinfo/Europe/Madrid /etc/localtime \
+ && echo "Europe/Madrid" > /etc/timezone \
+ && apk del --no-cache tzdata curl \
+ && rm -f /usr/bin/nc
+
+# ver ../nginx/static.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN chown -R root:root /etc/nginx \
+ && chmod -R go-w /etc/nginx
+
+WORKDIR /usr/share/nginx/html
+RUN rm -rf ./*
+# Solo el resultado del build. --chown=root:root es el valor por defecto,
+# se deja explícito para que se vea al leerlo.
+COPY --from=build --chown=root:root /app/dist ./
+
+USER 101
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1
+CMD ["nginx", "-g", "daemon off;"]

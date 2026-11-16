@@ -1,0 +1,52 @@
+services:
+  web:
+    build: .
+    image: mi-web:latest
+    container_name: mi-web
+    restart: unless-stopped          # OWASP sugiere on-failure:N; web pública → prioriza volver tras reinicio
+
+    ports:
+      - "127.0.0.1:8090:8080"        # OWASP #5a: solo localhost (Docker se salta UFW)
+
+    # Solo si los logs tienen que salir al host (si no, quitar: van a docker logs)
+    # volumes:
+    #   - /var/log/web/mi-web:/var/log/nginx   # dir del host con dueño 101:101, NO 777
+    #   ⚠ logrotate en el host con "su 101 101" (el contenedor puede crear symlinks ahí)
+
+    read_only: true                  # OWASP #8
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+
+    cap_drop: [ALL]                  # OWASP #3
+    security_opt:
+      - no-new-privileges:true       # OWASP #4 (seccomp/AppArmor por defecto, #6)
+
+    mem_limit: 128m                  # OWASP #7
+    memswap_limit: 128m
+    cpus: 0.5
+    pids_limit: 100                  # límite de procesos DEL CONTENEDOR (cgroup)
+    ulimits:
+      nofile: { soft: 1024, hard: 2048 }
+    logging:                         # sin límite, json-file crece hasta llenar el disco
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    # ⚠ NO usar ulimits.nproc: cuenta los procesos de ese UID en TODO el host
+    #   (uid 101 del contenedor = uid 101 del host). Con varios contenedores
+    #   nginx (o dbus, que en Debian/Ubuntu es uid 101) se agota y fallan
+    #   healthcheck y docker exec con "resource temporarily unavailable".
+
+    networks: [web_net]              # OWASP #5
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+networks:
+  web_net:
+    name: mi-web_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.90.0/24     # fija si nginx.conf usa set_real_ip_from; distinta por proyecto

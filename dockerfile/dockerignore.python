@@ -1,0 +1,20 @@
+# ALLOWLIST: se ignora TODO y solo entra lo que se lista con "!".
+# Un fichero nuevo (.env.prod, dump.sql, clave.pem...) NO se cuela en la imagen
+# por accidente: hay que añadirlo aquí a propósito.
+# Al añadir un COPY al Dockerfile → añadir aquí la ruta (si no, el build falla
+# con "not found", que es justo lo que queremos: fallo visible, no fuga silenciosa).
+*
+
+# Código de la app ← ajustar a TU proyecto
+!requirements.txt
+!wsgi.py
+!app/
+
+# Aunque estén dentro de una carpeta permitida, nunca
+**/__pycache__
+**/*.pyc
+**/*.log
+**/.env*
+**/*.pem
+**/*.key
+**/*.sqlite3

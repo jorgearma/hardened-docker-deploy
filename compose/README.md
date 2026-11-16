@@ -1,4 +1,4 @@
-# OWASP Docker Security Cheat Sheet — Resumen para repasar
+# Compose y runtime seguros — OWASP Docker Security Cheat Sheet
 
 > Fuente: https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html
 > Resumen propio (en mis palabras) para configurar y auditar mis contenedores.
@@ -26,7 +26,9 @@ services:
     pids_limit: 100
     ulimits:
       nofile: { soft: 1024, hard: 2048 }
-      nproc: 64
+    logging:                            # #7  logs rotados (si no, llenan el disco)
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
     restart: on-failure:5               # #7 (OWASP sugiere on-failure:N)
     ports:
       - "127.0.0.1:8080:8080"           # #5a nunca 0.0.0.0 si hay UFW
@@ -161,10 +163,12 @@ Evita que un DoS o un proceso desbocado tumbe todo el VPS.
 |---|---|---|
 | Memoria | `--memory 256m --memory-swap 256m` | `mem_limit` / `memswap_limit` |
 | CPU | `--cpus 0.5` | `cpus` |
-| Procesos | `--pids-limit 100` / `--ulimit nproc=64` | `pids_limit` / `ulimits.nproc` |
+| Procesos | `--pids-limit 100` | `pids_limit` |
 | Descriptores | `--ulimit nofile=1024:2048` | `ulimits.nofile` |
 | Reinicios | `--restart=on-failure:5` | `restart: on-failure:5` |
+| Logs (disco) | `--log-opt max-size=10m --log-opt max-file=3` | `logging.options` (o por defecto en `daemon.json`) |
 
+- ⚠ **No usar `--ulimit nproc`** para limitar procesos: cuenta los procesos de ese **UID en todo el host** (sin userns, el uid del contenedor es el mismo del host). Me pasó: uid 101 = nginx-unprivileged **y** `messagebus` (dbus) del host → con varios nginx se agotó y fallaban el healthcheck y `docker exec` con `resource temporarily unavailable`. `pids_limit` va por cgroup y cuenta solo los del contenedor.
 - `on-failure:N` evita bucles infinitos de reinicio. (`unless-stopped` es aceptable si se decide a conciencia, p.ej. web pública.)
 
 ```bash
@@ -195,13 +199,13 @@ docker exec <c> touch /prueba      # debe dar "Read-only file system"
 | CVEs de la imagen | **Trivy**, Grype, Clair (gratis) · Snyk, Docker Scout, Anchore... |
 | Secretos en el repo | **gitleaks**, TruffleHog, ggshield |
 | Config de Docker/host | **Docker Bench for Security**, InSpec / dev-sec |
-| Compose / IaC | Trivy `config`, KICS, DockSec |
+| Compose / IaC | **KICS**, conftest (reglas propias en Rego) · ⚠ Trivy `config` **no** analiza `docker-compose.yml` (solo Dockerfile) |
 | Kubernetes | kube-bench, kubesec, kubeaudit |
 
 ```bash
 docker run --rm -i hadolint/hadolint < Dockerfile
 trivy image --severity HIGH,CRITICAL --ignore-unfixed mi-imagen:tag
-trivy config .
+trivy config .                      # Dockerfiles (NO revisa el compose)
 # Auditoría del host:
 docker run --rm --net host --pid host --userns host --cap-add audit_control \
   -v /etc:/etc:ro -v /var/lib:/var/lib:ro -v /var/run/docker.sock:/var/run/docker.sock:ro \
@@ -265,42 +269,80 @@ secrets:
 
 ---
 
-## Checklist de auditoría de un contenedor (copiar y pegar)
+## Configs de referencia (probadas)
 
-```bash
-C=nombre_contenedor
-docker inspect $C --format '
-User:        {{.Config.User}}
-Privileged:  {{.HostConfig.Privileged}}
-ReadOnly:    {{.HostConfig.ReadonlyRootfs}}
-CapDrop:     {{.HostConfig.CapDrop}}
-CapAdd:      {{.HostConfig.CapAdd}}
-SecurityOpt: {{.HostConfig.SecurityOpt}}
-AppArmor:    {{.AppArmorProfile}}
-Memory:      {{.HostConfig.Memory}}
-NanoCPUs:    {{.HostConfig.NanoCpus}}
-PidsLimit:   {{.HostConfig.PidsLimit}}
-Restart:     {{.HostConfig.RestartPolicy.Name}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}
-Ports:       {{.HostConfig.PortBindings}}
-Networks:    {{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}
-Mounts:      {{range .Mounts}}{{.Source}}->{{.Destination}}(rw={{.RW}}) {{end}}'
-docker exec $C sh -c 'id; grep -E "CapEff|NoNewPrivs|Seccomp:" /proc/self/status'
+| Fichero | Para qué |
+|---|---|
+| [`compose.static.yml`](compose.static.yml) | Un contenedor: web estática sin root |
+| [`compose.app-db.yml`](compose.app-db.yml) | App + PostgreSQL con dos redes y Docker secrets |
+
+## Patrón app + base de datos: dos redes
+
+1. Internet → Cloudflare / nginx del host (HTTPS) → `127.0.0.1:8000` → **app**.
+2. **app** (gunicorn + Flask, uid 10001) está en `frontend_net` **y** en `backend_net`: recibe del proxy y habla con la BD.
+3. **db** (PostgreSQL, uid 70) está **solo** en `backend_net`, que es `internal: true` → sin puertos publicados, sin salida a Internet, el proxy no la alcanza.
+
+## Secretos en la app: leerlos del fichero leer secretos y endpoint `/health`
+
+```python
+# app/__init__.py
+import os
+from flask import Flask, jsonify
+import psycopg
+
+def read_secret(name: str) -> str:
+    """Docker secrets se montan como ficheros en /run/secrets/<nombre>."""
+    with open(f"/run/secrets/{name}", encoding="utf-8") as f:
+        return f.read().strip()
+
+def create_app():
+    app = Flask(__name__)
+    app.config["SECRET_KEY"] = read_secret("flask_secret_key")
+
+    dsn = (f"host={os.environ['DB_HOST']} dbname={os.environ['DB_NAME']} "
+           f"user={os.environ['DB_USER']} password={read_secret('db_password')}")
+
+    # /health comprueba de verdad que llega a la BD, no solo que el proceso vive
+    @app.get("/health")
+    def health():
+        with psycopg.connect(dsn, connect_timeout=2) as conn:
+            conn.execute("SELECT 1")
+        return jsonify(status="ok")
+
+    return app
+```
+```python
+# wsgi.py
+from app import create_app
+app = create_app()
 ```
 
-| Campo | Valor esperado |
-|---|---|
-| User | no vacío / no `root` / no `0` |
-| Privileged | `false` |
-| ReadOnly | `true` |
-| CapDrop | `[ALL]` |
-| SecurityOpt | contiene `no-new-privileges:true` |
-| AppArmor | `docker-default` (no `unconfined`) |
-| Memory / PidsLimit | distinto de 0 |
-| Ports | `127.0.0.1` delante |
-| Mounts | sin `docker.sock`; `rw=false` donde se pueda |
-| CapEff | `0000000000000000` |
-| NoNewPrivs | `1` |
-| Seccomp | `2` |
+- Lo **no sensible** (host, nombre de BD, usuario) → `environment:`.
+- Lo **sensible** (contraseñas, claves) → `secrets:` → fichero. **Nunca** en `environment:` (se ve con `docker inspect`).
+- Detrás de un proxy, para que Flask vea la IP/esquema reales:
+  ```python
+  from werkzeug.middleware.proxy_fix import ProxyFix
+  app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)   # 1 = un proxy delante
+  ```
+
+## Crear los secretos
+
+```bash
+mkdir -p secrets && chmod 700 secrets
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > secrets/db_password.txt
+python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > secrets/flask_secret_key.txt
+chmod 444 secrets/*.txt
+echo "secrets/" >> .gitignore
+```
+
+**¿Por qué 444 y no 400?** En compose (sin Swarm) un secreto es un *bind mount*: dentro del contenedor el fichero conserva el dueño y permisos del host. Con `400` y dueño tu usuario, el uid 10001 (app) y el 70 (postgres) **no podrían leerlo**. La protección en el host la da el **directorio** `secrets/` con `700`: ningún otro usuario del host puede entrar.
+
+> ⚠ `POSTGRES_PASSWORD_FILE` solo se usa **la primera vez** (cuando el volumen está vacío). Cambiar el fichero después **no** cambia la contraseña de la BD → hacerlo con `ALTER USER app PASSWORD '...'` y luego actualizar el fichero.
+
+## Varios proyectos en el mismo VPS
+
+> Cada proyecto: **puerto del host distinto** (8089, 8090...) y **subred distinta** (172.30.89.0/24, 172.30.90.0/24...).
+> Si no hay logs al host, `/var/log/nginx` en la imagen son symlinks a stdout/stderr → `docker logs mi-web`.
 
 ---
 

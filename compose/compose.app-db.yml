@@ -1,0 +1,106 @@
+services:
+  # ── APP ───────────────────────────────────────────────────
+  app:
+    build: .
+    image: mi-app:latest
+    container_name: mi-app
+    init: true                       # tini como PID 1: señales + zombies
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy   # no arrancar hasta que la BD responda
+
+    ports:
+      - "127.0.0.1:8000:8000"        # OWASP #5a: solo localhost; puerto del host único por proyecto
+
+    environment:                     # SOLO datos no sensibles
+      DB_HOST: db
+      DB_NAME: app
+      DB_USER: app
+    secrets:                         # OWASP #12 → /run/secrets/<nombre>
+      - db_password
+      - flask_secret_key
+
+    read_only: true                  # OWASP #8
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    # Si la app guarda subidas de usuarios → volumen propio, nunca dentro de /app:
+    # volumes:
+    #   - uploads:/data/uploads      # y servirlas con nginx, no ejecutarlas
+
+    cap_drop: [ALL]                  # OWASP #3
+    security_opt:
+      - no-new-privileges:true       # OWASP #4
+
+    mem_limit: 256m                  # OWASP #7 (medir con docker stats)
+    memswap_limit: 256m
+    cpus: 1.0
+    pids_limit: 100                  # por cgroup; NO ulimits.nproc (cuenta el UID en todo el host)
+    ulimits:
+      nofile: { soft: 1024, hard: 2048 }
+    logging:                         # sin límite, json-file crece hasta llenar el disco
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+    networks: [frontend_net, backend_net]   # OWASP #5
+
+  # ── BASE DE DATOS ─────────────────────────────────────────
+  db:
+    image: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+    container_name: mi-app-db
+    # Arranca DIRECTAMENTE como postgres (uid 70 en Alpine, 999 en la imagen Debian).
+    # Sin esto, el entrypoint arranca como root y necesita CHOWN/SETUID... → no se podría cap_drop ALL.
+    user: "70:70"
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password   # *_FILE → lee el secreto del fichero
+    secrets:
+      - db_password
+
+    volumes:
+      - db_data:/var/lib/postgresql/data   # volumen con nombre: hereda dueño 70 de la imagen
+    # SIN ports: → la BD no se publica en el host
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+      - /var/run/postgresql:size=1m,uid=70,gid=70,mode=0700,noexec,nosuid,nodev   # socket unix
+    shm_size: 128m                   # Postgres usa memoria compartida (el defecto de 64m se queda corto)
+
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 100
+    logging:                         # sin límite, json-file crece hasta llenar el disco
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+    networks: [backend_net]          # SOLO la red interna
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  frontend_net:
+    name: mi-app_frontend
+  backend_net:
+    name: mi-app_backend
+    internal: true                   # sin salida a Internet y sin puertos publicables
+
+volumes:
+  db_data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  flask_secret_key:
+    file: ./secrets/flask_secret_key.txt

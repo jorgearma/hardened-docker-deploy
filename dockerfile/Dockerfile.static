@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────
+# Web estática servida por nginx SIN root
+# ─────────────────────────────────────────────────────────────
+# nginx-unprivileged: uid 101, puerto 8080, PID en /tmp. (OWASP #2)
+# Fijada por versión + DIGEST (OWASP #9/#13). Para actualizar el digest:
+#   docker pull nginxinc/nginx-unprivileged:1.30-alpine
+#   docker inspect --format '{{index .RepoDigests 0}}' nginxinc/nginx-unprivileged:1.30-alpine
+FROM nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
+
+# Pasos que necesitan root → solo aquí
+USER root
+
+# apk upgrade   → parches de seguridad publicados después de la imagen base
+# tzdata        → copiar zona horaria y borrar el paquete en la misma capa
+# apk del curl  → nginx no lo usa (healthcheck = wget de busybox)
+# rm nc         → sin netcat no hay reverse shell fácil con "nc -e"
+# hadolint ignore=DL3018
+RUN apk upgrade --no-cache \
+ && apk add --no-cache tzdata \
+ && cp /usr/share/zoneinfo/Europe/Madrid /etc/localtime \
+ && echo "Europe/Madrid" > /etc/timezone \
+ && apk del --no-cache tzdata curl \
+ && rm -f /usr/bin/nc
+
+# Config propiedad de root y sin escritura para nginx (uid 101).
+# La imagen base deja /etc/nginx con dueño 101 → se devuelve a root.
+# ver ../nginx/static.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN chown -R root:root /etc/nginx \
+ && chmod -R go-w /etc/nginx
+
+# Web: borrar la página por defecto y copiar SOLO lo necesario (nunca "COPY . .")
+WORKDIR /usr/share/nginx/html
+RUN rm -rf ./*
+# ← los ficheros de TU web
+COPY index.html styles.css main.js ./
+COPY assets ./assets
+
+# Vuelta al usuario sin privilegios (explícito aunque la base ya lo traiga)
+USER 101
+
+EXPOSE 8080
+
+# 127.0.0.1 y NO localhost: en Alpine localhost → ::1 y nginx solo escucha IPv4
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]

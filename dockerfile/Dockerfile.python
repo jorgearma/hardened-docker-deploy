@@ -1,0 +1,71 @@
+# syntax=docker/dockerfile:1
+
+# ── ETAPA 1: build ───────────────────────────────────────────
+# pip y (si hicieran falta) compiladores SOLO viven aquí.
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS build
+# pipefail: si falla un comando dentro de un pipe, falla el build (hadolint DL4006)
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+# Sin WORKDIR, "COPY x ." copia a / (hadolint DL3045)
+WORKDIR /build
+
+# venv en ruta fija → se copia entera a la etapa final
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Primero solo requirements → la capa de dependencias se cachea
+COPY requirements.txt .
+# pip uninstall: la imagen final no lleva pip dentro del venv
+RUN pip install -r requirements.txt \
+ && pip uninstall -y pip
+
+# Si hay que descargar algo (clave GPG de un repo, binario...) → AQUÍ y comprobando la huella.
+# Ejemplo real (panchi-bot, driver ODBC de SQL Server):
+#   RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg \
+#    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /microsoft-prod.asc \
+#    && gpg --show-keys --with-colons /microsoft-prod.asc | grep -q '^fpr:::::::::<HUELLA>:$' \
+#    && rm -rf /var/lib/apt/lists/*
+#   → en la etapa final: COPY --from=build /microsoft-prod.asc /usr/share/keyrings/
+# Si una librería necesita compilar (sin wheel binario), en ESTA etapa:
+#   RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpq-dev
+# Si pip necesita un token (índice privado) → NUNCA ARG/ENV:
+#   RUN --mount=type=secret,id=pip_token PIP_INDEX_URL="https://__token__:$(cat /run/secrets/pip_token)@..." pip install ...
+
+# ── ETAPA 2: imagen final ────────────────────────────────────
+# MISMA imagen base que la etapa 1 (el venv depende de la versión exacta de Python)
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+
+# Trazabilidad: de qué repo sale la imagen (docker inspect / registries la muestran)
+LABEL org.opencontainers.image.title="mi-app" \
+      org.opencontainers.image.source="https://github.com/<usuario>/<repo>"
+
+# PYTHONDONTWRITEBYTECODE: no intenta escribir .pyc (el FS es read-only)
+# PYTHONUNBUFFERED: logs al momento en docker logs
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+# Usuario de sistema, sin shell, sin home, uid fijo (OWASP #2)
+RUN groupadd -r -g 10001 app \
+ && useradd -r -u 10001 -g app -s /usr/sbin/nologin -M app
+
+# COPY deja todo como root:root → la app NO puede modificar su código ni sus librerías
+COPY --from=build /opt/venv /opt/venv
+WORKDIR /app
+# ← el código de TU app (y añadirlo también a la allowlist del .dockerignore)
+COPY wsgi.py .
+COPY app ./app
+
+USER 10001
+EXPOSE 8000
+
+# python:slim no trae curl ni wget → healthcheck con Python
+# --start-period: margen de arranque (apps que cargan modelos, migraciones...) sin contar fallos
+HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+
+# gunicorn (nunca el servidor de desarrollo de Flask en producción)
+# --worker-tmp-dir /dev/shm: gunicorn necesita escribir un fichero de latido por worker
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", \
+     "--worker-tmp-dir", "/dev/shm", "--access-logfile", "-", "wsgi:app"]

@@ -1,0 +1,16 @@
+.git
+.github
+.gitignore
+.env
+.env.*
+*.pem
+*.key
+*.log
+node_modules
+dist
+build
+Dockerfile
+docker-compose*.yml
+*.md
+.claude
+.DS_Store
