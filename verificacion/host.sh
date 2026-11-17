@@ -5,7 +5,7 @@
 # Uso:  sudo ./host.sh
 set -u
 . "$(dirname "$0")/lib.sh"
-necesita docker
+necesita_daemon
 
 dj=/etc/docker/daemon.json
 

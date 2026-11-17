@@ -26,3 +26,10 @@ resumen() {
 necesita() {
   command -v "$1" >/dev/null 2>&1 || { echo "Falta el comando: $1" >&2; exit 2; }
 }
+
+# Sin acceso al daemon, "docker ps" sale vacío y las comprobaciones darían OK falsos.
+necesita_daemon() {
+  necesita docker
+  docker info >/dev/null 2>&1 ||
+    { echo "Sin acceso al daemon de Docker (¿sudo? ¿grupo docker? ¿está arrancado?)" >&2; exit 2; }
+}

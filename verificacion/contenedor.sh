@@ -9,7 +9,7 @@
 # del contenedor y lo borran en el mismo comando. No reinicia ni modifica nada más.
 set -u
 . "$(dirname "$0")/lib.sh"
-necesita docker
+necesita_daemon
 
 if [ $# -eq 0 ]; then
   sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
@@ -23,7 +23,8 @@ fi
 ins() { docker inspect -f "$2" "$1" 2>/dev/null; }
 
 revisar() {
-  local c=$1 st pid uid user capdrop capadd capeff nnp sec aa v linea nombre valor
+  local c=$1 st pid uid user capdrop capadd capeff capbnd nnp sec aa v linea nombre valor
+  local tmpfs_dirs vol_dirs dirs item d ej_tmp ej_vol noexec nocopia
   titulo "Contenedor: $c"
 
   if [ "$(ins "$c" '{{.State.Running}}')" != true ]; then
@@ -71,8 +72,21 @@ revisar() {
     fallo "#3  falta cap_drop: [ALL] (CapDrop='$capdrop')"
   fi
   [ -z "$capadd" ] || aviso "#3  capabilities añadidas: $capadd (justificar cada una)"
+  # CapBnd es lo que de verdad refleja cap_drop: un proceso sin root tiene CapEff = 0
+  # aunque no se haya quitado nada; CapBnd es el techo de lo que podría llegar a tener
+  # (root con docker exec, un binario con file capabilities...).
+  capbnd=$(campo CapBnd)
+  if [ -z "$capbnd" ]; then
+    manual "#3  no se pudo leer CapBnd del proceso principal"
+  elif [ "$capbnd" = 0000000000000000 ]; then
+    ok "#3  CapBnd = 0 (ninguna capability alcanzable dentro del contenedor)"
+  elif [ -n "$capadd" ]; then
+    aviso "#3  CapBnd = $capbnd (capsh --decode=$capbnd)"
+  else
+    fallo "#3  CapBnd = $capbnd: capabilities alcanzables (capsh --decode=$capbnd)"
+  fi
   if [ "$capeff" = 0000000000000000 ]; then
-    ok "#3  CapEff = 0 (el proceso no tiene ninguna capability)"
+    ok "#3  CapEff = 0 (el proceso principal no tiene ninguna capability activa)"
   elif [ -n "$capadd" ]; then
     aviso "#3  CapEff = $capeff (capsh --decode=$capeff)"
   else
@@ -108,7 +122,8 @@ revisar() {
   info "#5  redes:${v:- ninguna}"
 
   # shellcheck disable=SC2016
-  v=$(ins "$c" '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostIp}}:{{.HostPort}}->{{$p}} {{end}}{{end}}')
+  # NetworkSettings.Ports = puertos publicados de verdad (HostConfig.PortBindings no ve "-P")
+  v=$(ins "$c" '{{range $p, $b := .NetworkSettings.Ports}}{{range $b}}{{.HostIp}}:{{.HostPort}}->{{$p}} {{end}}{{end}}')
   if [ -z "$v" ]; then
     ok "#5a no publica puertos en el host"
   else
@@ -116,7 +131,8 @@ revisar() {
     for linea in $v; do
       case $linea in
         127.0.0.1:* | ::1:*) ;;
-        *) mal="$mal ${linea/#:/0.0.0.0:}" ;;
+        :[0-9]*) mal="$mal 0.0.0.0$linea" ;;
+        *) mal="$mal $linea" ;;
       esac
     done
     if [ -z "$mal" ]; then
@@ -237,18 +253,44 @@ revisar() {
     fallo "#8  activa: se pudo escribir en: $v(ya borrado)"
   fi
 
-  # Se copia el shell a /tmp/…/sh (con ese nombre para que busybox lo acepte) y se ejecuta.
+  # Ejecución desde cualquier sitio escribible, no solo /tmp: en cada uno se copia el shell
+  # a …/sh (con ese nombre para que busybox lo acepte) y se ejecuta. Se distingue "no se
+  # pudo copiar" de "no se pudo ejecutar" para no dar por bueno un noexec sin comprobar.
   # shellcheck disable=SC2016
+  tmpfs_dirs="/tmp /var/tmp /dev/shm $(ins "$c" '{{range $k, $v := .HostConfig.Tmpfs}}{{$k}} {{end}}{{range .Mounts}}{{if eq .Type "tmpfs"}}{{.Destination}} {{end}}{{end}}')"
+  vol_dirs=$(ins "$c" '{{range .Mounts}}{{if and .RW (ne .Type "tmpfs")}}{{.Destination}} {{end}}{{end}}')
+  # shellcheck disable=SC2086
+  dirs=$(printf '%s\n' $tmpfs_dirs $vol_dirs | sort -u)
+  # shellcheck disable=SC2016,SC2086
   v=$(docker exec "$c" sh -c '
-    d=/tmp/.verif_$$
-    mkdir "$d" 2>/dev/null || { echo NOESCRIBE; exit; }
-    cp "$(command -v sh)" "$d/sh" 2>/dev/null && "$d/sh" -c "echo EJECUTA" 2>/dev/null
-    rm -rf "$d"' 2>/dev/null)
-  case $v in
-    EJECUTA)   fallo "#8  activa: se puede ejecutar un binario copiado a /tmp (falta noexec)" ;;
-    NOESCRIBE) ok "#8  activa: /tmp no es escribible" ;;
-    *)         ok "#8  activa: /tmp no permite ejecutar (noexec)" ;;
-  esac
+    for d in "$@"; do
+      [ -d "$d" ] || continue
+      t="$d/.verif_$$"
+      mkdir "$t" 2>/dev/null || continue
+      if ! cp "$(command -v sh)" "$t/sh" 2>/dev/null; then echo "NOCOPIA:$d"
+      elif "$t/sh" -c : 2>/dev/null; then echo "EJECUTA:$d"
+      else echo "NOEXEC:$d"; fi
+      rm -rf "$t"
+    done' sh $dirs 2>/dev/null)
+  ej_tmp=; ej_vol=; noexec=; nocopia=
+  for item in $v; do
+    d=${item#*:}
+    case $item in
+      NOEXEC:*)  noexec="$noexec $d" ;;
+      NOCOPIA:*) nocopia="$nocopia $d" ;;
+      EJECUTA:*)
+        case " $vol_dirs " in
+          *" $d "*) ej_vol="$ej_vol $d" ;;
+          *)        ej_tmp="$ej_tmp $d" ;;
+        esac
+        ;;
+    esac
+  done
+  [ -n "$v" ] || ok "#8  activa: ningún directorio escribible donde dejar un binario (/tmp, tmpfs, volúmenes)"
+  [ -z "$noexec" ] || ok "#8  activa: escribible pero sin ejecución (noexec):$noexec"
+  [ -z "$ej_tmp" ] || fallo "#8  activa: se puede ejecutar un binario copiado a:$ej_tmp (falta noexec)"
+  [ -z "$ej_vol" ] || aviso "#8  activa: se puede ejecutar desde volúmenes escribibles:$ej_vol (ahí dejaría su binario un atacante)"
+  [ -z "$nocopia" ] || manual "#8  activa: no se pudo copiar el shell a:$nocopia (¿sin espacio?): noexec sin comprobar"
 
   v=$(docker exec "$c" sh -c 'find / -xdev -perm -4000 -type f 2>/dev/null' 2>/dev/null | tr '\n' ' ')
   if [ -z "$v" ]; then

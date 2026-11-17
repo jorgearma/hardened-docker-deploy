@@ -49,7 +49,7 @@ Restart:     {{.HostConfig.RestartPolicy.Name}}:{{.HostConfig.RestartPolicy.Maxi
 Ports:       {{.HostConfig.PortBindings}}
 Networks:    {{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}
 Mounts:      {{range .Mounts}}{{.Source}}->{{.Destination}}(rw={{.RW}}) {{end}}'
-docker exec $C sh -c 'id; grep -E "CapEff|NoNewPrivs|Seccomp:" /proc/self/status'
+docker exec $C sh -c 'id; grep -E "CapEff|CapBnd|NoNewPrivs|Seccomp:" /proc/self/status'
 ```
 
 | Campo | Valor esperado |
@@ -64,6 +64,7 @@ docker exec $C sh -c 'id; grep -E "CapEff|NoNewPrivs|Seccomp:" /proc/self/status
 | Ports | `127.0.0.1` delante |
 | Mounts | sin `docker.sock`; `rw=false` donde se pueda |
 | CapEff | `0000000000000000` |
+| CapBnd | `0000000000000000` (es el que demuestra `cap_drop: ALL`; CapEff ya es 0 en cualquier proceso sin root) |
 | NoNewPrivs | `1` |
 | Seccomp | `2` |
 
@@ -83,7 +84,7 @@ docker ps --filter name=$C --format '{{.Status}}'
 curl -sI http://127.0.0.1:$P/
 
 # 3. Endurecimiento del proceso
-docker exec $C sh -c 'id; grep -E "CapEff|NoNewPrivs|Seccomp:" /proc/self/status'
+docker exec $C sh -c 'id; grep -E "CapEff|CapBnd|NoNewPrivs|Seccomp:" /proc/self/status'
 #    esperado: uid=101 · CapEff 0000000000000000 · NoNewPrivs 1 · Seccomp 2
 
 # 4. Post-explotación: todo debe FALLAR
