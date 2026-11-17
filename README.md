@@ -33,6 +33,16 @@ Basado en la [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.
 | `compose/` | `compose.static.yml` · `compose.app-db.yml` · `compose.proxy-app-db.yml` |
 | `nginx/` | `static.conf` · `proxy.conf` · `host-vhost.conf` (nginx del host, HTTPS) |
 
+## Skill para Claude Code
+
+[`SKILL.md`](SKILL.md) convierte este repo en una skill: le dice a Claude qué plantilla usar en cada caso, qué leer antes de tocar cada fichero y qué scripts pasar antes de dar nada por terminado.
+
+Para usarla desde cualquier proyecto, enlazar (o clonar) el repo en la carpeta personal de skills:
+
+```bash
+ln -s "$(pwd)" ~/.claude/skills/docker-nginx-seguro
+```
+
 ## Licencia
 
 [MIT](LICENSE)
