@@ -1,6 +1,7 @@
 # Compose y runtime seguros — OWASP Docker Security Cheat Sheet
 
 > Fuente: https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html
+> Copia del original en el repo: [`owasp/docker-security-cheat-sheet.md`](../owasp/docker-security-cheat-sheet.md)
 > Resumen propio (en mis palabras) para configurar y auditar mis contenedores.
 > Revisado: 2026-11-16
 
