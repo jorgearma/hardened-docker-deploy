@@ -18,6 +18,7 @@ Todas las rutas de este fichero son relativas a la carpeta de la skill (la raíz
 | Web estática con paso de build (npm) | `dockerfile/Dockerfile.static-build` | `compose/compose.static.yml` | `nginx/static.conf` |
 | App Python + base de datos, sin nginx propio | `dockerfile/Dockerfile.python` | `compose/compose.app-db.yml` | — |
 | nginx proxy + app + base de datos | `dockerfile/Dockerfile.python` | `compose/compose.proxy-app-db.yml` | `nginx/proxy.conf` |
+| Web estática servida por Cloudflare Tunnel (túnel propio del proyecto) | `dockerfile/Dockerfile.static` o `Dockerfile.static-build` | `compose/compose.static-tunnel.yml` | `nginx/static.conf` (con `set_real_ip_from` = subred `internal`) |
 
 - `.dockerignore`: copiar `dockerfile/dockerignore.static` o `dockerfile/dockerignore.python` como `.dockerignore`.
 - HTTPS: si el TLS lo termina el nginx del host, añadir `nginx/host-vhost.conf`. Con Cloudflare Tunnel no hace falta.
@@ -45,7 +46,7 @@ Toda config que salga de aquí cumple esto. Si algo obliga a saltarse un punto, 
 1. Proceso **sin root** (`USER` en el Dockerfile o `user:` en el compose).
 2. Sistema de ficheros **read-only**; solo `/tmp` escribible, con `noexec,nosuid,nodev`.
 3. `cap_drop: [ALL]` + `no-new-privileges:true`. `cap_add` solo justificado.
-4. Puertos publicados **solo en `127.0.0.1`** (Docker se salta UFW).
+4. Puertos publicados **solo en `127.0.0.1`** (Docker se salta UFW), o ninguno si el túnel va en el compose.
 5. Secretos **fuera de la imagen**: Docker secrets, nunca `ENV`/`ARG` ni en el repo.
 6. Imágenes fijadas por **versión + digest**.
 7. Límites de memoria, CPU y procesos (`pids_limit`, **no** `ulimits.nproc`).

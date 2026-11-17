@@ -277,6 +277,61 @@ secrets:
 | [`compose.static.yml`](compose.static.yml) | Un contenedor: web estática sin root |
 | [`compose.app-db.yml`](compose.app-db.yml) | App + PostgreSQL con dos redes y Docker secrets |
 | [`compose.proxy-app-db.yml`](compose.proxy-app-db.yml) | nginx + app + PostgreSQL: solo el proxy publica puerto (estructura de panchi-bot) |
+| [`compose.static-tunnel.yml`](compose.static-tunnel.yml) | Web estática + Cloudflare Tunnel en contenedor: sin puertos en el host y sin salida a Internet (estructura del portfolio) |
+
+## Patrón web + Cloudflare Tunnel en contenedor
+
+1. Internet → Cloudflare → **túnel propio del proyecto** → **cloudflared** (contenedor, uid 65532).
+2. **cloudflared** está en dos redes: `egress` (con salida, para hablar con Cloudflare) e `internal`.
+3. **web** está **solo** en `internal` (`internal: true`): **sin `ports:`** y **sin salida a Internet**. Si alguien consigue ejecutar código dentro, no puede descargar herramientas ni abrir una reverse shell.
+4. El token del túnel va como Docker secret con `--token-file`: ni en `environment` ni en la línea de comandos.
+5. `internal` lleva **subred fija**: cloudflared está en ella, así que `set_real_ip_from` de `nginx.conf` sigue recibiendo la IP real (`CF-Connecting-IP`).
+
+**Frente a cloudflared en el host (systemd):**
+
+| | cloudflared en el host | cloudflared en el compose |
+|---|---|---|
+| Usuario | root (si la unidad no pone `User=`) | 65532, `read_only`, `cap_drop: ALL` |
+| Puerto en el host | `127.0.0.1:<puerto>` por proyecto | Ninguno |
+| Salida a Internet de la web | Sí (la red no puede ser `internal` si publica puerto) | No |
+| Alcance si se compromete | Todas las webs del túnel | Solo este proyecto |
+| Dónde vive la config | Panel + unidad de systemd | Panel + compose versionado en git |
+
+**Un túnel por proyecto.** Si un único túnel del host sirve varias webs, no se puede apagar sin cortarlas todas: se migra proyecto a proyecto.
+
+### Montarlo
+
+```bash
+# 1. Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared → nombre del proyecto.
+#    En "Install connector" elegir Docker y copiar SOLO el token (lo que va tras --token, empieza por eyJ).
+#    No ejecutar el comando que da el panel (usa :latest y el token en la línea de comandos).
+
+# 2. Guardar el token (sin que se vea ni quede en el historial)
+mkdir -m 700 secrets
+read -rs -p "Token: " T; echo; printf '%s' "$T" > secrets/tunnel_token; unset T
+chmod 444 secrets/tunnel_token
+wc -l secrets/tunnel_token          # 0 → sin salto de línea final
+git status --short                  # secrets/ NO debe aparecer
+
+# 3. Levantar y comprobar que conecta
+docker compose up -d --build
+docker compose logs cloudflared | grep 'Registered tunnel connection'   # normalmente 4
+
+# 4. Panel: rutas del túnel → http://web:8080 (nombre del SERVICIO y puerto de DENTRO)
+docker compose logs cloudflared | grep 'Updated to new configuration'
+
+# 5. DNS → Records: comprobar que existen @ y www como CNAME <tunnelID>.cfargotunnel.com (proxied)
+docker compose logs cloudflared | grep -o 'tunnelID=[a-f0-9-]*' | head -1
+```
+
+### Migrar un proyecto desde el cloudflared del host
+
+1. Crear el túnel nuevo y el secreto (pasos 1-2). Hasta aquí no se corta nada.
+2. `docker compose down` **con el compose viejo** (o `docker rm -f` + `docker network rm` de la red vieja): la red nueva usa la misma subred y chocaría (`Pool overlaps`).
+3. `git pull` + `docker compose up -d --build`. **Desde aquí la web está caída.**
+4. Panel: borrar las rutas del túnel viejo y añadirlas al nuevo.
+5. **DNS → Records:** al quitar la ruta del túnel viejo, Cloudflare borra el registro DNS y puede no recrearlo (error **1016**). Crearlo a mano: CNAME `@` / `www` → `<tunnelID>.cfargotunnel.com`, proxied.
+6. Si tu navegador sigue sin resolver, es la caché DNS de tu red (guardó el "no existe"): `dig @1.1.1.1` lo confirma.
 
 ## Patrón proxy + app + base de datos
 

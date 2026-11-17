@@ -21,7 +21,7 @@ Basado en la [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.
 - Proceso **sin root** (`USER` en el Dockerfile o `user:` en el compose).
 - Sistema de ficheros **read-only**; solo `/tmp` escribible, con `noexec`.
 - `cap_drop: [ALL]` + `no-new-privileges`.
-- Puertos publicados **solo en `127.0.0.1`** (Docker se salta UFW).
+- Puertos publicados **solo en `127.0.0.1`** (Docker se salta UFW), o ninguno con el túnel de Cloudflare dentro del compose.
 - Secretos **fuera de la imagen** (Docker secrets, nunca `ENV`/`ARG`).
 - Imágenes fijadas por **versión + digest**.
 - Límites de memoria, CPU y procesos.
@@ -31,7 +31,7 @@ Basado en la [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.
 | Carpeta | Ficheros |
 |---|---|
 | `dockerfile/` | `Dockerfile.static` · `Dockerfile.static-build` · `Dockerfile.python` · `dockerignore.*` |
-| `compose/` | `compose.static.yml` · `compose.app-db.yml` · `compose.proxy-app-db.yml` |
+| `compose/` | `compose.static.yml` · `compose.static-tunnel.yml` · `compose.app-db.yml` · `compose.proxy-app-db.yml` |
 | `nginx/` | `static.conf` · `proxy.conf` · `host-vhost.conf` (nginx del host, HTTPS) |
 
 ## Skill para Claude Code
