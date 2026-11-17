@@ -51,10 +51,13 @@ case $cmd in
     trivy_ image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$arg"
     veredicto trivy $?
     titulo "dockle $arg"
+    # KEY_SHA512: hash de la clave PÚBLICA de firma de nginx, en una capa de la imagen
+    # base oficial (nginx, nginx-unprivileged). No es un secreto, pero CIS-DI-0010 marca
+    # cualquier nombre con "KEY" → FATAL con todas las imágenes de nginx.
     if command -v dockle >/dev/null 2>&1; then
-      dockle --exit-code 1 "$arg"
+      dockle --exit-code 1 --accept-key KEY_SHA512 "$arg"
     else
-      docker run --rm -v "$SOCK:$SOCK:ro" "$DOCKLE_IMG" --exit-code 1 "$arg"
+      docker run --rm -v "$SOCK:$SOCK:ro" "$DOCKLE_IMG" --exit-code 1 --accept-key KEY_SHA512 "$arg"
     fi
     veredicto dockle $?
     ;;

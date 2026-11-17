@@ -222,8 +222,17 @@ revisar() {
   v=$(ins "$c" '{{.Config.Image}}')
   if grep -q '@sha256:' <<<"$v"; then
     ok "#13 imagen fijada por digest"
-  elif [ "$(docker image inspect -f '{{len .RepoDigests}}' "$v" 2>/dev/null)" = 0 ]; then
+  # Construida en local: no se puede fijar por digest en el compose (el digest nace al
+  # construir); lo que cuenta es el FROM. Se detecta por la etiqueta que pone
+  # "docker compose build" y, si no, por RepoDigests vacío. RepoDigests solo no basta:
+  # con el containerd image store las imágenes construidas en local también tienen.
+  elif [ -n "$(docker image inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$v" 2>/dev/null)" ] ||
+       [ "$(docker image inspect -f '{{len .RepoDigests}}' "$v" 2>/dev/null)" = 0 ]; then
     manual "#13 imagen construida en local ($v): comprobar que el FROM lleva @sha256"
+    # Sin etiqueta o con :latest (':[^/]+$' = hay tag; los ':' de host:puerto/ van antes de una '/')
+    if ! grep -qE ':[^/]+$' <<<"$v" || grep -q ':latest$' <<<"$v"; then
+      aviso "#13 $v sin versión en la etiqueta: no se sabe qué build está en marcha ni se puede volver atrás (etiquetar p. ej. con el commit de git)"
+    fi
   else
     aviso "#13 imagen sin digest: $v"
   fi
