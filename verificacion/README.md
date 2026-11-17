@@ -10,7 +10,7 @@ Automatizan las pruebas de esta página. Cada línea sale como `OK`, `FALLO`, `A
 |---|---|---|
 | [`contenedor.sh`](contenedor.sh) | Un contenedor en marcha: `docker inspect`, estado real del proceso (`/proc`) y pruebas activas de post-explotación | #1 #2 #3 #4 #5 #5a #6 #7 #8 #12 #13 |
 | [`web.sh`](web.sh) | nginx visto desde fuera: cabeceras (ni 0 ni 2), rutas sensibles, métodos, filtro de Host, rate limit, 413 | — (OWASP Secure Headers) |
-| [`host.sh`](host.sh) | El VPS y el daemon: API por TCP, `docker.sock`, puertos en `0.0.0.0`, seccomp/AppArmor, rootless | #0 #1 #5a #6 #10 #11 |
+| [`host.sh`](host.sh) | El VPS y el daemon: API por TCP, `docker.sock`, puertos publicados fuera de localhost, seccomp/AppArmor, rootless | #0 #1 #5a #6 #10 #11 |
 | [`herramientas.sh`](herramientas.sh) | Lanza trivy, dockle, hadolint, gixy, testssl.sh, gitleaks y docker-bench-security | #9 #13 |
 
 ```bash

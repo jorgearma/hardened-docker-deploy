@@ -7,8 +7,8 @@
 #   docker inspect --format '{{index .RepoDigests 0}}' nginxinc/nginx-unprivileged:1.30-alpine
 FROM nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
 
-# Pasos que necesitan root → solo aquí
-USER root
+# Pasos que necesitan root → solo aquí (uid numérico: hadolint DL3066)
+USER 0
 
 # apk upgrade   → parches de seguridad publicados después de la imagen base
 # tzdata        → copiar zona horaria y borrar el paquete en la misma capa
@@ -42,7 +42,8 @@ USER 101
 EXPOSE 8080
 
 # 127.0.0.1 y NO localhost: en Alpine localhost → ::1 y nginx solo escucha IPv4
+# Forma JSON (hadolint DL3025): sin shell de por medio; wget ya sale con código ≠ 0 si falla
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1
+  CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
 
 CMD ["nginx", "-g", "daemon off;"]

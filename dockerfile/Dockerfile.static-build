@@ -23,7 +23,7 @@ RUN npm run build
 # ── ETAPA 2: imagen final = Dockerfile.static, pero copiando dist/ ──
 FROM nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
 
-USER root
+USER 0
 
 # hadolint ignore=DL3018
 RUN apk upgrade --no-cache \
@@ -47,5 +47,5 @@ COPY --from=build --chown=root:root /app/dist ./
 USER 101
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1
+  CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
 CMD ["nginx", "-g", "daemon off;"]

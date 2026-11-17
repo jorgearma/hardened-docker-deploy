@@ -42,13 +42,24 @@ else
 fi
 
 # ── #5a Puertos ──
-mal=$(docker ps --format '{{.Names}}: {{.Ports}}' | grep -E '0\.0\.0\.0:|\[::\]:')
+# Todo lo que no sea loopback cuenta: 0.0.0.0, [::] y también una IP concreta del host
+# (p. ej. "203.0.113.5:80:80"), que un grep de "0.0.0.0" dejaría pasar como OK.
+mal=
+for c in $(docker ps -q); do
+  nombre=$(docker inspect -f '{{.Name}}' "$c")
+  # shellcheck disable=SC2016
+  for p in $(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{range $b}}{{.HostIp}}:{{.HostPort}}->{{$p}} {{end}}{{end}}' "$c"); do
+    case $p in
+      127.*:* | ::1:*) ;;
+      :[0-9]*) mal="$mal ${nombre#/}=0.0.0.0$p" ;;
+      *)       mal="$mal ${nombre#/}=$p" ;;
+    esac
+  done
+done
 if [ -z "$mal" ]; then
   ok "#5a ningún contenedor publica puertos fuera de localhost"
 else
-  fallo "#5a contenedores con puertos abiertos a Internet (Docker se salta UFW):"
-  # shellcheck disable=SC2001
-  sed 's/^/             /' <<<"$mal"
+  fallo "#5a contenedores con puertos abiertos a Internet (Docker se salta UFW):$mal"
 fi
 if command -v ss >/dev/null 2>&1; then
   v=$(ss -Hltn 2>/dev/null | awk '{print $4}' | grep -vE '^(127\.|\[::1\])' | sed -E 's/.*:([0-9]+)$/\1/' | sort -un | tr '\n' ' ')

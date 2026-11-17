@@ -18,6 +18,8 @@ fi
 if [ "$1" = --todos ]; then
   # shellcheck disable=SC2046
   set -- $(docker ps --format '{{.Names}}')
+  # Sin esto saldría "0 FALLO" y código 0 sin haber comprobado nada.
+  [ $# -gt 0 ] || { echo "No hay contenedores en marcha: nada que auditar" >&2; exit 2; }
 fi
 
 ins() { docker inspect -f "$2" "$1" 2>/dev/null; }
