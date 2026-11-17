@@ -1,0 +1,159 @@
+# ─────────────────────────────────────────────────────────────
+# nginx (proxy) + app + PostgreSQL. Estructura sacada de panchi-bot.
+#
+# Cadena: Internet → [Cloudflare Tunnel | nginx del host] → 127.0.0.1:8081 → proxy → app → db
+#
+# Redes:
+#   web_net      proxy ↔ app. Subred y gateway FIJOS: nginx.conf solo se fía de la
+#                cabecera con la IP real si la conexión viene de ese gateway.
+#   backend_net  internal: true → la BD SIN salida a Internet y SIN alcance desde el proxy.
+#
+# Solo el proxy publica puerto. La app NO lleva ports: (solo expose) → no se puede
+# llegar a ella saltándose nginx (cabeceras, rate limit, filtro de Host).
+# ─────────────────────────────────────────────────────────────
+
+# Endurecimiento común (OWASP #3 #4 #7 #8). YAML anchor → mismo bloque en todos.
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+  logging:                           # sin límite, json-file crece hasta llenar el disco
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  # ── PROXY ─────────────────────────────────────────────────
+  proxy:
+    <<: *hardening
+    # uid 101, escucha en 8080 (sin capabilities)
+    image: nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
+    container_name: mi-app-proxy
+    depends_on:
+      app:
+        condition: service_healthy   # nginx resuelve "app" al arrancar: si no existe, no arranca
+
+    ports:
+      - "127.0.0.1:8081:8080"        # OWASP #5a: solo localhost; puerto del host único por proyecto
+
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro   # ver ../nginx/proxy.conf
+
+    tmpfs:                           # pid, y cuerpos de petición/respuesta grandes (client_max_body_size < size)
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    pids_limit: 100                  # por cgroup; NO ulimits.nproc (cuenta el UID en todo el host)
+    ulimits:
+      nofile: { soft: 1024, hard: 2048 }
+
+    networks: [web_net]              # NO está en backend_net → no ve la BD
+
+    healthcheck:
+      # 127.0.0.1 y no localhost: localhost → ::1 y nginx solo escucha IPv4.
+      # /nginx-health lo responde nginx solo → mide nginx, no la app.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/nginx-health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # ── APP ───────────────────────────────────────────────────
+  app:
+    <<: *hardening
+    build: .
+    image: mi-app:latest
+    container_name: mi-app
+    init: true                       # tini como PID 1: señales + zombies
+    depends_on:
+      db:
+        condition: service_healthy   # no arrancar hasta que la BD responda
+
+    expose:
+      - "8000"                       # solo documenta: SIN ports → inalcanzable desde el host
+
+    environment:                     # SOLO datos no sensibles
+      DB_HOST: db
+      DB_NAME: app
+      DB_USER: app
+    secrets:                         # OWASP #12 → /run/secrets/<nombre>
+      - db_password
+      - flask_secret_key
+
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+
+    mem_limit: 256m                  # medir con docker stats
+    memswap_limit: 256m
+    cpus: 1.0
+    pids_limit: 100
+    ulimits:
+      nofile: { soft: 1024, hard: 2048 }
+
+    # web_net NO es internal → la app tiene salida a Internet (APIs externas).
+    # Workers que solo necesitan salir y hablar con la BD: red aparte (egress_net)
+    # + backend_net, fuera de web_net (así lo hace panchi-bot).
+    networks: [web_net, backend_net]
+    # El healthcheck viene del HEALTHCHECK de la imagen (Dockerfile.python)
+
+  # ── BASE DE DATOS ─────────────────────────────────────────
+  db:
+    <<: *hardening
+    image: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+    container_name: mi-app-db
+    # Arranca DIRECTAMENTE como postgres (uid 70 en Alpine, 999 en la imagen Debian).
+    # Sin esto, el entrypoint arranca como root y necesita CHOWN/SETUID... → no se podría cap_drop ALL.
+    user: "70:70"
+
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password   # *_FILE → lee el secreto del fichero
+    secrets:
+      - db_password
+
+    volumes:
+      - db_data:/var/lib/postgresql/data   # volumen con nombre: hereda dueño 70 de la imagen
+    # SIN ports: → la BD no se publica en el host
+
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+      - /var/run/postgresql:size=1m,uid=70,gid=70,mode=0700,noexec,nosuid,nodev   # socket unix
+    shm_size: 128m                   # Postgres usa memoria compartida (cuenta dentro de mem_limit)
+
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 1.0
+    pids_limit: 100
+
+    networks: [backend_net]          # SOLO la red interna
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+networks:
+  web_net:
+    name: mi-app_web
+    ipam:
+      config:
+        # Distinta por proyecto. Si se cambia: cambiar también set_real_ip_from en nginx.conf
+        - subnet: 172.30.80.0/24
+          gateway: 172.30.80.1
+  backend_net:
+    name: mi-app_backend
+    internal: true                   # sin salida a Internet y sin puertos publicables
+
+volumes:
+  db_data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  flask_secret_key:
+    file: ./secrets/flask_secret_key.txt

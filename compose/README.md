@@ -275,6 +275,18 @@ secrets:
 |---|---|
 | [`compose.static.yml`](compose.static.yml) | Un contenedor: web estática sin root |
 | [`compose.app-db.yml`](compose.app-db.yml) | App + PostgreSQL con dos redes y Docker secrets |
+| [`compose.proxy-app-db.yml`](compose.proxy-app-db.yml) | nginx + app + PostgreSQL: solo el proxy publica puerto (estructura de panchi-bot) |
+
+## Patrón proxy + app + base de datos
+
+1. Internet → Cloudflare Tunnel / nginx del host (HTTPS) → `127.0.0.1:8081` → **proxy** ([`nginx/proxy.conf`](../nginx/proxy.conf)).
+2. **proxy** (nginx, uid 101) está **solo** en `web_net`: habla con la app, no ve la BD.
+3. **app** está en `web_net` y `backend_net`, **sin `ports:`** → no se puede llegar a ella saltándose nginx.
+4. **db** está **solo** en `backend_net` (`internal: true`).
+5. `web_net` lleva **subred y gateway fijos**: es la única IP de la que nginx acepta la cabecera con la IP real.
+6. Lo común (`read_only`, `cap_drop`, `no-new-privileges`, `restart`, `logging`) va en un anchor `x-hardening` → no se olvida en ningún servicio.
+
+¿Cuándo este y cuándo `compose.app-db.yml`? Con proxy propio, las cabeceras, el rate limit y el filtro de Host viajan con el proyecto y se prueban en local. Sin él, todo eso hay que ponerlo en el nginx del host.
 
 ## Patrón app + base de datos: dos redes
 

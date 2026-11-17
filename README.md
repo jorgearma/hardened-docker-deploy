@@ -29,8 +29,8 @@ Basado en la [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.
 | Carpeta | Ficheros |
 |---|---|
 | `dockerfile/` | `Dockerfile.static` · `Dockerfile.static-build` · `Dockerfile.python` · `dockerignore.*` |
-| `compose/` | `compose.static.yml` · `compose.app-db.yml` |
-| `nginx/` | `static.conf` |
+| `compose/` | `compose.static.yml` · `compose.app-db.yml` · `compose.proxy-app-db.yml` |
+| `nginx/` | `static.conf` · `proxy.conf` · `host-vhost.conf` (nginx del host, HTTPS) |
 
 ## Licencia
 

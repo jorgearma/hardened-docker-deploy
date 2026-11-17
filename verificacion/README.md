@@ -153,6 +153,83 @@ nmap -p 8000,5432 <IP_PUBLICA_VPS>  # ambos filtered/closed
 
 ---
 
+## Pruebas: proxy + app + base de datos
+
+Para [`compose.proxy-app-db.yml`](../compose/compose.proxy-app-db.yml) + [`proxy.conf`](../nginx/proxy.conf). Además de las de la sección anterior (endurecimiento, secretos, BD aislada):
+
+```bash
+U=http://127.0.0.1:8081; H='Host: www.example.com'
+code(){ curl -s -o /dev/null -w '%{http_code}\n' "$@"; }
+
+# 1. Filtro de Host: el dominio propio pasa, lo demás se corta (000 = conexión cerrada, 444)
+code -H "$H" $U/                    # 200
+code -H 'Host: evil.com' $U/        # 000
+code $U/                            # 000 (Host = 127.0.0.1)
+
+# 2. Rutas sensibles: 404 de nginx, sin llegar a la app
+for p in /.git/config /.env /x.sql /backup.bak; do code -H "$H" $U$p; done
+
+# 3. Rate limit del login: 6 pasan (1 + burst 5), el resto 429
+for i in $(seq 20); do curl -s -o /dev/null -w '%{http_code} ' -H "$H" -X POST $U/auth/login; done; echo
+
+# 4. Subida mayor que client_max_body_size → 413
+head -c 2000000 /dev/zero | code -H "$H" --data-binary @- $U/
+
+# 5. IP real: desde el host (gateway) se acepta la cabecera...
+curl -s -o /dev/null -H "$H" -H 'X-Real-IP: 203.0.113.7' "$U/?ok"
+# ...desde otro contenedor de la misma red, NO (en el log sale su IP 172.30.80.x, no 6.6.6.6)
+docker run --rm --network mi-app_web alpine wget -qO /dev/null \
+  --header "$H" --header 'X-Real-IP: 6.6.6.6' 'http://proxy:8080/?spoof'
+docker compose logs --no-log-prefix proxy | grep -E '\?(ok|spoof)'
+
+# 6. La app no publica puerto y el proxy no ve la BD
+docker compose ps --format '{{.Service}} {{.Ports}}'            # solo proxy con 127.0.0.1
+docker compose exec proxy sh -c 'nc -z -w 2 db 5432 && echo ALCANZABLE || echo "NO alcanzable"'
+
+# 7. Lint de la config de nginx
+docker run --rm -v ./nginx.conf:/etc/nginx/conf.d/default.conf:ro getpagespeed/gixy /etc/nginx/conf.d/default.conf
+```
+
+### nginx del host (`host-vhost.conf`)
+
+```bash
+nginx -t
+curl -sI  http://www.example.com/            # 301 → https://www.example.com/
+curl -sI  https://example.com/               # 301 → https://www.example.com/
+curl -sI  https://www.example.com/ | grep -ci strict-transport-security   # 1 (ni 0 ni 2)
+curl -skI https://<IP_PUBLICA_VPS>/          # falla el handshake (ssl_reject_handshake)
+curl -sI  http://<IP_PUBLICA_VPS>/           # conexión cerrada (444)
+curl -s --tls-max 1.1 https://www.example.com/   # falla: solo TLS 1.2 y 1.3
+# Nota externa: https://www.ssllabs.com/ssltest/
+```
+
+### Resultados de la prueba real (2026-11-17)
+
+Stack levantado con la imagen `mi-app:latest` y, delante, `host-vhost.conf` con certificado autofirmado y puertos altos (no en un VPS con dominio real).
+
+| Prueba | Resultado |
+|---|---|
+| proxy / app / db healthy | ✅ |
+| Host propio → 200 · Host falso o sin Host válido → conexión cerrada | ✅ |
+| `/.git/config`, `/.env`, `.sql`, `.bak` → 404 | ✅ |
+| Login: 6 peticiones pasan, las 14 siguientes → 429 | ✅ |
+| POST de 2 MB → 413 | ✅ |
+| `X-Real-IP` aceptada desde el gateway (`172.30.80.1`) | ✅ |
+| `X-Real-IP` falsa desde otro contenedor de `web_net` | ✅ Ignorada (se registra `172.30.80.4`) |
+| proxy uid 101 · app uid 10001 · db uid 70; los tres CapEff 0, NoNewPrivs 1, Seccomp 2 | ✅ |
+| Escribir en `/etc/nginx/conf.d` del proxy | ✅ Bloqueado (read-only) |
+| proxy → db | ✅ No alcanzable (ni resuelve el nombre) |
+| db → Internet | ✅ Sin salida |
+| Solo el proxy publica puerto, en `127.0.0.1` | ✅ |
+| Host: HTTP → 301 HTTPS · sin www → 301 www · reto ACME servido | ✅ |
+| Host: acceso por IP (HTTP y HTTPS) y TLS 1.1 | ✅ Rechazados |
+| Host + contenedor: HSTS una vez, resto de cabeceras una vez, HTTP/2 | ✅ |
+| Visitante manda `X-Real-IP` falsa a través de las dos capas | ✅ Sobrescrita por la IP de la conexión |
+| gixy en `proxy.conf` y `host-vhost.conf` | ✅ Sin avisos |
+| Consumo | proxy ~17 MB · app ~70 MB · db ~26 MB |
+
+---
+
 ## Checklist de proyecto nuevo: web estática
 
 - [ ] Elegir plantilla A o B (¿hay `npm run build`?)
