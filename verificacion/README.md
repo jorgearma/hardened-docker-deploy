@@ -30,6 +30,37 @@ sudo ./host.sh
 
 ---
 
+## Paso 0: identificar un contenedor ya desplegado
+
+Si el contenedor no lo has montado tú ahora (auditoría de algo que ya está en marcha), antes del checklist confirma **qué es y de dónde sale**. El nombre del contenedor no tiene por qué coincidir con el proyecto (`container_name:` en el compose).
+
+```bash
+# 1. Identidad y origen (etiquetas que pone docker compose)
+docker inspect C1 C2 --format \
+'{{.Name}}
+  imagen-config = {{.Config.Image}}
+  imagen-id     = {{.Image}}
+  creado        = {{.Created}}
+  proyecto      = {{index .Config.Labels "com.docker.compose.project"}}
+  compose-dir   = {{index .Config.Labels "com.docker.compose.project.working_dir"}}
+  compose-file  = {{index .Config.Labels "com.docker.compose.project.config_files"}}
+'
+
+# 2. ¿La etiqueta sigue apuntando a la imagen que corre el contenedor?
+docker image inspect <imagen-config> --format '{{index .RepoTags 0}}  id={{.Id}}  creada={{.Created}}'
+```
+
+| Qué ves | Qué significa |
+|---|---|
+| Nombre del contenedor ≠ `proyecto` | El código y el compose están en `compose-dir`, no en una carpeta con el nombre del contenedor |
+| `proyecto` / `compose-dir` vacíos | No se lanzó con compose (`docker run` a mano): buscar cómo se arrancó |
+| `docker ps` muestra un ID en la columna IMAGE en vez del nombre | La etiqueta se movió a otra imagen: se reconstruyó sin recrear el contenedor |
+| `id` de la etiqueta (comando 2) ≠ `imagen-id` (comando 1) | Confirmado: el contenedor corre una **imagen huérfana**. El código en disco no es el que está corriendo; auditar la imagen del contenedor (`imagen-id`), no la etiqueta |
+
+> Caso real (2026-11-18): `ssh-rain-backend` / `ssh-rain-frontend` resultaron ser el proyecto `siege-map` en `/opt/apps/siege-map`, y `docker ps` mostraba el backend como `542084c660bd` en vez de `siege-map-backend`.
+
+---
+
 ## Checklist de auditoría de un contenedor (copiar y pegar)
 
 ```bash
