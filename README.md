@@ -13,6 +13,7 @@ Basado en la [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.
 | Cómo configurar nginx (cabeceras, CSP, `location`, caché, rutas sensibles) | [`nginx/`](nginx/README.md) |
 | Cómo comprobar que un contenedor está bien endurecido | [`verificacion/`](verificacion/README.md) |
 | Qué me ha salido mal y cómo lo arreglé | [`errores-vividos.md`](errores-vividos.md) |
+| Cómo audité y ataqué mi propio VPS, y cómo lo cerré con estas plantillas | [`ofensivo/`](ofensivo/README.md) |
 | Qué dice exactamente OWASP (cheat sheet original, en inglés) | [`owasp/`](owasp/docker-security-cheat-sheet.md) |
 
 ## Lo que garantizan todas las configs

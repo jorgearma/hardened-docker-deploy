@@ -81,7 +81,7 @@ Internet ─► [ Cloudflare Tunnel  |  nginx del host (host-vhost.conf) ] ─�
 ## Trampas
 
 - **`add_header` no se hereda** si una `location` define su propio `add_header` → todas las cabeceras en el `server`, ninguna en las `location`.
-- **Prioridad de `location`:** `=` exacta → `^~` prefijo (corta la búsqueda) → regex `~`/`~*` en orden → prefijo más largo. Por eso `/assets/` lleva `^~`: si no, la regex de extensiones se lo quedaría.
+- **Prioridad de `location`:** `=` exacta → `^~` prefijo (corta la búsqueda) → regex `~`/`~*` en orden → prefijo más largo. Por eso `/assets/` lleva `^~`: si no, la regex de extensiones se lo quedaría. Efecto secundario: `^~` también se salta los bloqueos de ficheros ocultos y extensiones sensibles, así que en `static.conf` van repetidos como `location` anidadas dentro de `/assets/`.
 - **CSP:** empezar con `Content-Security-Policy-Report-Only`, revisar la consola del navegador y después activarla.
 - **HSTS** va donde se termina el HTTPS (Cloudflare o nginx del host), no en el contenedor.
 

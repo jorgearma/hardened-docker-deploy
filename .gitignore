@@ -1,3 +1,6 @@
 secrets/
 .env
 .env.*
+
+# Evidencias sin redactar del caso ofensivo
+ofensivo/**/bruto/
