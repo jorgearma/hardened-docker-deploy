@@ -2,6 +2,34 @@
 
 Cómo comprobar que un contenedor está bien endurecido **antes** de ponerlo en producción.
 
+## Scripts (para pasar en el VPS con el contenedor ya arriba)
+
+Automatizan las pruebas de esta página. Cada línea sale como `OK`, `FALLO`, `AVISO` o `MANUAL` (lo que un script no puede decidir), con el número de regla OWASP delante. Código de salida 1 si hay algún `FALLO`.
+
+| Script | Qué comprueba | Reglas OWASP |
+|---|---|---|
+| [`contenedor.sh`](contenedor.sh) | Un contenedor en marcha: `docker inspect`, estado real del proceso (`/proc`) y pruebas activas de post-explotación | #1 #2 #3 #4 #5 #5a #6 #7 #8 #12 #13 |
+| [`web.sh`](web.sh) | nginx visto desde fuera: cabeceras (ni 0 ni 2), rutas sensibles, métodos, filtro de Host, rate limit, 413 | — (OWASP Secure Headers) |
+| [`host.sh`](host.sh) | El VPS y el daemon: API por TCP, `docker.sock`, puertos en `0.0.0.0`, seccomp/AppArmor, rootless | #0 #1 #5a #6 #10 #11 |
+| [`herramientas.sh`](herramientas.sh) | Lanza trivy, dockle, hadolint, gixy, testssl.sh, gitleaks y docker-bench-security | #9 #13 |
+
+```bash
+cd verificacion
+./contenedor.sh mi-app mi-app-db mi-app-proxy        # o: ./contenedor.sh --todos
+./web.sh -H www.example.com -l /auth/login -b 2 http://127.0.0.1:8081   # proxy + app
+./web.sh -e http://127.0.0.1:8090                    # web estática
+./web.sh -l /auth/login https://www.example.com      # desde fuera, por Cloudflare / nginx del host
+sudo ./host.sh
+./herramientas.sh imagen mi-app:latest
+./herramientas.sh nginx ../nginx/proxy.conf
+```
+
+- Las pruebas activas de `contenedor.sh` crean un fichero temporal dentro del contenedor y lo borran en el mismo comando.
+- `web.sh -l` deja tu IP limitada en el login durante un minuto.
+- Quedan fuera (siempre manuales): `nmap` desde fuera del VPS, versiones al día (#0) y el CI (#9).
+
+---
+
 ## Checklist de auditoría de un contenedor (copiar y pegar)
 
 ```bash
