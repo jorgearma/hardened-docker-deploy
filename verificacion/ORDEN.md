@@ -42,6 +42,8 @@ docker inspect <contenedores> --format ...   # bloque del Paso 0
 sudo ./host.sh
 ```
 
+También avisa de servicios del host (fuera de Docker) con red que corren como root, como un `cloudflared` instalado con systemd.
+
 **Por qué antes que los contenedores:** un `docker.sock` montado, la API de Docker por TCP o un `--privileged` le dan **root en el host** a quien entre en un contenedor. Un FALLO aquí anula todo lo demás: se arregla primero.
 
 ---

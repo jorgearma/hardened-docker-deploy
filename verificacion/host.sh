@@ -105,6 +105,37 @@ else
   fallo "#2  contenedores --privileged:$mal"
 fi
 
+# ── #2 Servicios del HOST con red que corren como root ──
+# Los contenedores los revisa contenedor.sh; esto mira lo que corre FUERA de Docker
+# (systemd). Así apareció el cloudflared del host como root: su unidad no tiene User=
+# y systemd lo ejecuta como root. Cuenta todo socket que no sea solo de loopback:
+# puertos en escucha y también conexiones salientes (el túnel no escucha, sale por QUIC).
+# root ES lo esperado en estos (no se avisa):
+esperados=' sshd systemd systemd-network systemd-resolve dockerd docker-proxy containerd chronyd '
+if [ "$(id -u)" -ne 0 ]; then
+  manual "#2  servicios del host con red: ejecutar con sudo (sin root, ss no muestra los procesos de otros usuarios)"
+elif command -v ss >/dev/null 2>&1; then
+  mal=; vistos=' '
+  for pid in $(ss -Htunap 2>/dev/null | awk '$5 !~ /^(127\.|\[::1\]|\[::ffff:127\.)/' |
+               grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -un); do
+    [ -r "/proc/$pid/cgroup" ] || continue
+    # Procesos de un contenedor: su cgroup es docker-<id>.scope (o /docker/<id> en cgroup v1)
+    grep -qE 'docker-[0-9a-f]{12,}\.scope|/docker/[0-9a-f]{12,}|libpod-' "/proc/$pid/cgroup" && continue
+    [ "$(ps -o user= -p "$pid" | tr -d ' ')" = root ] || continue
+    comm=$(ps -o comm= -p "$pid")
+    case "$esperados$vistos" in *" $comm "*) continue ;; esac
+    vistos="$vistos$comm "
+    unidad=$(grep -oE '[^/]+\.service' "/proc/$pid/cgroup" | head -1)
+    mal="$mal $comm(pid $pid${unidad:+, $unidad})"
+  done
+  if [ -z "$mal" ]; then
+    ok "#2  ningún servicio del host con red corre como root (salvo los esperados: sshd, dockerd…)"
+  else
+    aviso "#2  servicios del host con red corriendo como root:$mal"
+    info "#2  por qué root: systemctl show <unidad> -p User (vacío = root) · el proceso: ps -o user,pid,cmd -p <pid>"
+  fi
+fi
+
 info "auditoría completa del host (CIS): ./herramientas.sh host"
 info "cada contenedor: ./contenedor.sh --todos"
 resumen
