@@ -4,7 +4,9 @@
 #
 # Uso:  ./web.sh [opciones] URL
 #   -H dominio   cabecera Host a enviar (cuando la URL es 127.0.0.1:<puerto>)
-#   -l ruta      ruta del login: lanza 20 POST y espera algún 429
+#   -l ruta      ruta del login: lanza N POST seguidos y espera algún 429
+#   -n N         peticiones de la prueba de rate limit (por defecto 20). Debe ser
+#                mayor que el burst de limit_req, o el límite no llega a saltar
 #   -b MB        envía un POST de ese tamaño y espera 413 (poner más que client_max_body_size)
 #   -e           web estática: POST/PUT/DELETE no deben aceptarse (405)
 #   -k           aceptar certificado autofirmado
@@ -13,17 +15,19 @@
 #   ./web.sh -H www.example.com -l /auth/login -b 2 http://127.0.0.1:8081
 #   ./web.sh -e http://127.0.0.1:8090
 #   ./web.sh -l /auth/login https://www.example.com      # a través de Cloudflare / nginx del host
+#   ./web.sh -l /api/health -n 60 http://127.0.0.1:8082   # limit_req con burst=30
 #
 # OJO: -l deja tu IP limitada en el login durante un minuto.
 set -u
 . "$(dirname "$0")/lib.sh"
 necesita curl
 
-host=; login=; cuerpo=; estatica=0; extra=()
-while getopts 'H:l:b:ek' o; do
+host=; login=; cuerpo=; estatica=0; extra=(); npet=20
+while getopts 'H:l:n:b:ek' o; do
   case $o in
     H) host=$OPTARG ;;
     l) login=$OPTARG ;;
+    n) npet=$OPTARG ;;
     b) cuerpo=$OPTARG ;;
     e) estatica=1 ;;
     k) extra+=(-k) ;;
@@ -32,9 +36,12 @@ while getopts 'H:l:b:ek' o; do
 done
 shift $((OPTIND - 1))
 if [ $# -ne 1 ]; then
-  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 fi
+case $npet in
+  '' | *[!0-9]*) echo "-n necesita un número (recibido: '$npet')" >&2; exit 2 ;;
+esac
 url=${1%/}
 [ -n "$host" ] || host=$(sed -E 's#^https?://([^/]+).*#\1#' <<<"$url")
 
@@ -201,13 +208,13 @@ esac
 # ── Rate limit del login ──
 if [ -n "$login" ]; then
   n=0
-  for _ in $(seq 20); do
+  for _ in $(seq "$npet"); do
     [ "$(codigo -X POST "$url$login")" != 429 ] || n=$((n + 1))
   done
   if [ "$n" -gt 0 ]; then
-    ok "rate limit en $login: $n de 20 peticiones → 429"
+    ok "rate limit en $login: $n de $npet peticiones → 429"
   else
-    fallo "sin rate limit en $login: 20 POST seguidos y ningún 429"
+    fallo "sin rate limit en $login: $npet POST seguidos y ningún 429 (si limit_req tiene burst >= $npet, subir -n)"
   fi
 else
   manual "rate limit del login no probado (usar -l /ruta/login)"

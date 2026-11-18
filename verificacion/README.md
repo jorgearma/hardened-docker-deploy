@@ -2,6 +2,8 @@
 
 Cómo comprobar que un contenedor está bien endurecido **antes** de ponerlo en producción.
 
+> ¿Por dónde empezar? Ver [ORDEN.md](ORDEN.md).
+
 ## Scripts (para pasar en el VPS con el contenedor ya arriba)
 
 Automatizan las pruebas de esta página. Cada línea sale como `OK`, `FALLO`, `AVISO` o `MANUAL` (lo que un script no puede decidir), con el número de regla OWASP delante. Código de salida 1 si hay algún `FALLO`.
@@ -28,9 +30,42 @@ sudo ./host.sh
 - `web.sh -l` deja tu IP limitada en el login durante un minuto.
 - Quedan fuera (siempre manuales): `nmap` desde fuera del VPS, versiones al día (#0) y el CI (#9).
 
+### Qué pruebas de esta página hace un script y cuáles hay que lanzar a mano
+
+| Sección / prueba | ¿Lo hace un script? | Nota |
+|---|---|---|
+| Paso 0: identidad y origen, imagen huérfana | ❌ Manual | |
+| Checklist de auditoría (`docker inspect` + `/proc`) | ✅ `contenedor.sh` | Ver columna en la tabla del checklist |
+| Post-explotación: escribir en `/`, `/etc`, código, librerías | ✅ `contenedor.sh` | |
+| Copiar un binario y ejecutarlo (noexec) | ✅ `contenedor.sh` | Prueba `/tmp`, `/var/tmp`, `/dev/shm`, tmpfs y volúmenes |
+| Binarios SUID | ✅ `contenedor.sh` | |
+| `which curl nc …` dentro del contenedor | ✅ `contenedor.sh` | Sale como `INFO`: decides tú si sobra alguna |
+| Healthy | ✅ `contenedor.sh` | `/health` de la app: manual |
+| Permisos sin `read_only` (`docker run --rm … touch`) | ❌ Manual | Los scripts no arrancan contenedores nuevos |
+| Herramientas de build en la imagen (`node`, `npm`, `gcc`, `pip`) | ⚠️ En parte | `contenedor.sh` lista las del contenedor en marcha (incluido el `pip` del sistema); `python -m pip` y `node`/`npm`: manual |
+| Secretos en variables de entorno | ✅ `contenedor.sh` | |
+| Secretos en `/run/secrets` y en `docker history` | ❌ Manual | |
+| Redes: `internal` o con salida | ⚠️ En parte | `contenedor.sh` solo las lista (`INFO`) |
+| BD sin Internet, BD inalcanzable desde `frontend_net`, proxy → BD | ❌ Manual | |
+| Puertos publicados solo en `127.0.0.1` | ✅ `contenedor.sh`, `host.sh` | |
+| Cabeceras (ni 0 ni 2), `Server` sin versión, cookies | ✅ `web.sh` | |
+| Rutas sensibles → 404 | ✅ `web.sh` | Su lista no incluye `/README.md` |
+| TRACE / métodos de escritura | ✅ `web.sh` | POST/PUT/DELETE/PATCH solo con `-e` (web estática) |
+| Filtro de Host | ✅ `web.sh` | |
+| Rate limit del login | ✅ `web.sh -l` | Con `burst` ≥ 20 en `limit_req`, subir el número de peticiones con `-n` (p. ej. `-n 60`) |
+| Subida mayor que `client_max_body_size` → 413 | ✅ `web.sh -b` | |
+| `X-Real-IP` falsa desde otro contenedor | ❌ Manual | |
+| nginx del host: HTTP → HTTPS | ✅ `web.sh` | Con URL `https://` y sin puerto |
+| nginx del host: sin www → www, acceso por IP, TLS 1.1, `nginx -t` | ❌ Manual | TLS completo: `herramientas.sh tls` |
+| hadolint, trivy, dockle, gixy, testssl, gitleaks, docker-bench | ✅ `herramientas.sh` | |
+| `docker stats` (consumo) | ❌ Manual | |
+| `nmap` desde fuera del VPS | ❌ Manual | `host.sh` lo recuerda con un `MANUAL` |
+
 ---
 
 ## Paso 0: identificar un contenedor ya desplegado
+
+> Manual: ningún script lo hace.
 
 Si el contenedor no lo has montado tú ahora (auditoría de algo que ya está en marcha), antes del checklist confirma **qué es y de dónde sale**. El nombre del contenedor no tiene por qué coincidir con el proyecto (`container_name:` en el compose).
 
@@ -83,21 +118,23 @@ Mounts:      {{range .Mounts}}{{.Source}}->{{.Destination}}(rw={{.RW}}) {{end}}'
 docker exec $C sh -c 'id; grep -E "CapEff|CapBnd|NoNewPrivs|Seccomp:" /proc/self/status'
 ```
 
-| Campo | Valor esperado |
-|---|---|
-| User | no vacío / no `root` / no `0` |
-| Privileged | `false` |
-| ReadOnly | `true` |
-| CapDrop | `[ALL]` |
-| SecurityOpt | contiene `no-new-privileges:true` |
-| AppArmor | `docker-default` (no `unconfined`) |
-| Memory / PidsLimit | distinto de 0 |
-| Ports | `127.0.0.1` delante |
-| Mounts | sin `docker.sock`; `rw=false` donde se pueda |
-| CapEff | `0000000000000000` |
-| CapBnd | `0000000000000000` (es el que demuestra `cap_drop: ALL`; CapEff ya es 0 en cualquier proceso sin root) |
-| NoNewPrivs | `1` |
-| Seccomp | `2` |
+| Campo | Valor esperado | ¿Lo hace `contenedor.sh`? |
+|---|---|---|
+| User | no vacío / no `root` / no `0` | ✅ (mira el uid real del proceso, no solo `User`) |
+| Privileged | `false` | ✅ |
+| ReadOnly | `true` | ✅ |
+| CapDrop | `[ALL]` | ✅ |
+| SecurityOpt | contiene `no-new-privileges:true` | ✅ (lo lee de `/proc`: `NoNewPrivs`) |
+| AppArmor | `docker-default` (no `unconfined`) | ✅ |
+| Memory / PidsLimit | distinto de 0 | ✅ (y avisa si no hay límite de CPU) |
+| Restart | `on-failure:N` o `unless-stopped` | ❌ Manual |
+| Ports | `127.0.0.1` delante | ✅ |
+| Networks | redes propias, la BD en una `internal` | ⚠️ Avisa con la red por defecto y lista el resto |
+| Mounts | sin `docker.sock`; `rw=false` donde se pueda | ✅ (`AVISO` con bind mounts escribibles) |
+| CapEff | `0000000000000000` | ✅ |
+| CapBnd | `0000000000000000` (es el que demuestra `cap_drop: ALL`; CapEff ya es 0 en cualquier proceso sin root) | ✅ |
+| NoNewPrivs | `1` | ✅ |
+| Seccomp | `2` | ✅ |
 
 ---
 
@@ -105,46 +142,49 @@ docker exec $C sh -c 'id; grep -E "CapEff|CapBnd|NoNewPrivs|Seccomp:" /proc/self
 
 Las mismas que se pasaron al portfolio. Arrancar con `docker compose up -d --build` y:
 
+> Marcas al final de cada línea: `[✅ script]` lo hace ese script · `[⚠️ …]` lo hace en parte · `[❌ manual]` hay que lanzarlo a mano.
+> Con scripts: `./contenedor.sh mi-web` · `./web.sh -e http://127.0.0.1:8090` · `./herramientas.sh dockerfile Dockerfile` · `./herramientas.sh imagen mi-web:latest`
+
 ```bash
 C=mi-web; P=8090
 
 # 1. Arranca y está healthy (esperar ~35 s)
-docker ps --filter name=$C --format '{{.Status}}'
+docker ps --filter name=$C --format '{{.Status}}'                            # [✅ contenedor.sh]
 
 # 2. Cabeceras
-curl -sI http://127.0.0.1:$P/
+curl -sI http://127.0.0.1:$P/                                                # [✅ web.sh]
 
 # 3. Endurecimiento del proceso
-docker exec $C sh -c 'id; grep -E "CapEff|CapBnd|NoNewPrivs|Seccomp:" /proc/self/status'
+docker exec $C sh -c 'id; grep -E "CapEff|CapBnd|NoNewPrivs|Seccomp:" /proc/self/status'   # [✅ contenedor.sh]
 #    esperado: uid=101 · CapEff 0000000000000000 · NoNewPrivs 1 · Seccomp 2
 
 # 4. Post-explotación: todo debe FALLAR
-docker exec $C sh -c 'echo pwn > /usr/share/nginx/html/shell.html'          # Read-only / Permission denied
-docker exec $C sh -c 'echo x > /etc/nginx/conf.d/evil.conf'                  # Read-only
-docker exec $C sh -c 'cp /bin/busybox /tmp/bb && /tmp/bb echo exec'          # Permission denied (noexec)
-docker exec $C sh -c 'find / -xdev -perm -4000 2>/dev/null'                  # vacío (sin SUID)
-docker exec $C sh -c 'which curl nc node npm'                                # solo deberían salir los que esperas
+docker exec $C sh -c 'echo pwn > /usr/share/nginx/html/shell.html'          # Read-only / Permission denied   [✅ contenedor.sh]
+docker exec $C sh -c 'echo x > /etc/nginx/conf.d/evil.conf'                  # Read-only   [⚠️ contenedor.sh prueba /etc, no /etc/nginx/conf.d]
+docker exec $C sh -c 'cp /bin/busybox /tmp/bb && /tmp/bb echo exec'          # Permission denied (noexec)   [✅ contenedor.sh]
+docker exec $C sh -c 'find / -xdev -perm -4000 2>/dev/null'                  # vacío (sin SUID)   [✅ contenedor.sh]
+docker exec $C sh -c 'which curl nc node npm'                                # solo deberían salir los que esperas   [⚠️ contenedor.sh: curl y nc sí, node y npm no]
 
 # 5. Permisos sin read_only (la segunda capa también aguanta)
-docker run --rm --entrypoint sh mi-web:latest -c 'touch /usr/share/nginx/html/x'   # Permission denied
+docker run --rm --entrypoint sh mi-web:latest -c 'touch /usr/share/nginx/html/x'   # Permission denied   [❌ manual]
 
 # 6. Rutas sensibles → 404 / métodos → 405
-for p in /.git/config /.env /Dockerfile /nginx.conf /README.md; do
+for p in /.git/config /.env /Dockerfile /nginx.conf /README.md; do          # [⚠️ web.sh: todas menos /README.md]
   echo "$p -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$P$p)"; done
-curl -s -o /dev/null -w 'TRACE -> %{http_code}\n' -X TRACE http://127.0.0.1:$P/
-curl -s -o /dev/null -w 'POST  -> %{http_code}\n' -X POST  http://127.0.0.1:$P/
+curl -s -o /dev/null -w 'TRACE -> %{http_code}\n' -X TRACE http://127.0.0.1:$P/   # [✅ web.sh]
+curl -s -o /dev/null -w 'POST  -> %{http_code}\n' -X POST  http://127.0.0.1:$P/   # [✅ web.sh -e]
 
 # 7. Lint y CVEs
-docker run --rm -i hadolint/hadolint < Dockerfile
-trivy image --severity HIGH,CRITICAL --ignore-unfixed mi-web:latest
+docker run --rm -i hadolint/hadolint < Dockerfile                            # [✅ herramientas.sh dockerfile]
+trivy image --severity HIGH,CRITICAL --ignore-unfixed mi-web:latest          # [✅ herramientas.sh imagen]
 
 # 8. Desde FUERA del VPS: el puerto del contenedor NO debe verse
-nmap -p 8090 <IP_PUBLICA_VPS>      # filtered/closed
+nmap -p 8090 <IP_PUBLICA_VPS>      # filtered/closed   [❌ manual]
 ```
 
 ### Web con paso de build: que no se cuele nada
 ```bash
-docker run --rm --entrypoint sh mi-web:latest -c 'which node npm; ls /usr/share/nginx/html'
+docker run --rm --entrypoint sh mi-web:latest -c 'which node npm; ls /usr/share/nginx/html'   # [❌ manual]
 # node y npm NO deben aparecer; en html solo lo que había en dist/
 ```
 
@@ -156,44 +196,47 @@ docker run --rm --entrypoint sh mi-web:latest -c 'which node npm; ls /usr/share/
 
 Resultado esperado = lo que salió en la prueba del 2026-11-16.
 
+> Con scripts: `./contenedor.sh <app> <db>` · `./herramientas.sh dockerfile Dockerfile` · `./herramientas.sh imagen mi-app:latest`. El resto, a mano (marcas como en la sección anterior).
+
 ```bash
-docker compose up -d --build
+docker compose up -d --build                                 # [❌ manual: hace falta antes de los scripts]
 
 # 1. Los dos healthy y /health OK (comprueba también la conexión a la BD)
-docker compose ps
-curl -s http://127.0.0.1:8000/health                         # {"status":"ok"}
+docker compose ps                                            # [✅ contenedor.sh]
+curl -s http://127.0.0.1:8000/health                         # {"status":"ok"}   [❌ manual]
 
 # 2. Endurecimiento (app y db)
-docker compose exec app sh -c 'id; grep -E "CapEff|NoNewPrivs|Seccomp:" /proc/self/status; cat /proc/1/comm'
+docker compose exec app sh -c 'id; grep -E "CapEff|NoNewPrivs|Seccomp:" /proc/self/status; cat /proc/1/comm'   # [⚠️ contenedor.sh: todo menos /proc/1/comm]
 #   uid=10001 · CapEff 0 · NoNewPrivs 1 · Seccomp 2 · docker-init
-docker compose exec db  sh -c 'id; grep -E "CapEff|NoNewPrivs" /proc/self/status'
+docker compose exec db  sh -c 'id; grep -E "CapEff|NoNewPrivs" /proc/self/status'                              # [✅ contenedor.sh]
 #   uid=70 · CapEff 0 · NoNewPrivs 1
 
 # 3. La app no puede modificarse a sí misma ni a sus librerías
-docker compose exec app sh -c 'echo x > /app/app/__init__.py'                                  # Read-only
-docker compose exec app sh -c 'echo x > /opt/venv/lib/python3.12/site-packages/flask/__init__.py' # Read-only
-docker run --rm --entrypoint sh mi-app:latest -c 'touch /app/x'                                 # Permission denied (sin read_only también)
+docker compose exec app sh -c 'echo x > /app/app/__init__.py'                                  # Read-only   [✅ contenedor.sh, crea un fichero en /app]
+docker compose exec app sh -c 'echo x > /opt/venv/lib/python3.12/site-packages/flask/__init__.py' # Read-only   [⚠️ contenedor.sh prueba /opt/venv, no site-packages]
+docker run --rm --entrypoint sh mi-app:latest -c 'touch /app/x'                                 # Permission denied (sin read_only también)   [❌ manual]
 
 # 4. Secretos: en fichero, NO en variables ni en la imagen
-docker compose exec app sh -c 'ls -la /run/secrets/'
-docker compose exec app sh -c 'env | grep -iE "pass|secret"'          # vacío (GPG_KEY de la imagen python es pública, no cuenta)
-docker history --no-trunc mi-app:latest | grep -iE 'secret|pass'      # vacío
+docker compose exec app sh -c 'ls -la /run/secrets/'                  # [❌ manual]
+docker compose exec app sh -c 'env | grep -iE "pass|secret"'          # vacío (GPG_KEY de la imagen python es pública, no cuenta)   [✅ contenedor.sh]
+docker history --no-trunc mi-app:latest | grep -iE 'secret|pass'      # vacío   [❌ manual]
 
 # 5. Aislamiento de red
-docker compose exec db sh -c 'wget -q -T 3 -O /dev/null http://example.com && echo SI || echo NO'   # NO (red internal)
-docker run --rm --network mi-app_frontend alpine nc -z -w 2 db 5432 && echo ALCANZABLE || echo "NO alcanzable"   # NO
-docker compose ps --format '{{.Service}} {{.Ports}}'                 # db SIN 0.0.0.0 ni 127.0.0.1
+docker compose exec db sh -c 'wget -q -T 3 -O /dev/null http://example.com && echo SI || echo NO'   # NO (red internal)   [❌ manual; contenedor.sh solo dice si la red es internal]
+docker run --rm --network mi-app_frontend alpine nc -z -w 2 db 5432 && echo ALCANZABLE || echo "NO alcanzable"   # NO   [❌ manual]
+docker compose ps --format '{{.Service}} {{.Ports}}'                 # db SIN 0.0.0.0 ni 127.0.0.1   [✅ contenedor.sh]
 
 # 6. Herramientas de build fuera de la imagen final
-docker run --rm --entrypoint sh mi-app:latest -c 'which gcc curl wget; python -m pip --version'   # nada / "No module named pip"
+docker run --rm --entrypoint sh mi-app:latest -c 'which gcc curl wget pip pip3; python -m pip --version; /usr/local/bin/python -m pip --version'   # nada / "No module named pip" las DOS veces   [⚠️ contenedor.sh: gcc/curl/wget/pip en el contenedor en marcha; python -m pip, manual]
+#   OJO: "python" es el del venv. Si solo se mira "python -m pip", el pip del sistema (/usr/local) pasa desapercibido
 
 # 7. Lint, CVEs, consumo
-docker run --rm -i hadolint/hadolint < Dockerfile
-trivy image --severity HIGH,CRITICAL --ignore-unfixed mi-app:latest
-docker stats --no-stream            # en la prueba: app ~70 MB, db ~26 MB
+docker run --rm -i hadolint/hadolint < Dockerfile                    # [✅ herramientas.sh dockerfile]
+trivy image --severity HIGH,CRITICAL --ignore-unfixed mi-app:latest  # [✅ herramientas.sh imagen]
+docker stats --no-stream            # en la prueba: app ~70 MB, db ~26 MB   [❌ manual]
 
 # 8. Desde FUERA del VPS
-nmap -p 8000,5432 <IP_PUBLICA_VPS>  # ambos filtered/closed
+nmap -p 8000,5432 <IP_PUBLICA_VPS>  # ambos filtered/closed   [❌ manual]
 ```
 
 ### Resultados de la prueba real (2026-11-16)
@@ -209,6 +252,7 @@ nmap -p 8000,5432 <IP_PUBLICA_VPS>  # ambos filtered/closed
 | BD inalcanzable desde `frontend_net` | ✅ |
 | BD sin puerto publicado en el host | ✅ |
 | `pip` eliminado del venv | ✅ |
+| `pip` del sistema (`/usr/local/bin/pip`) | ❌ Seguía en la imagen (la prueba solo miraba el venv). Detectado el 2026-11-18; corregido en `Dockerfile.python` |
 | **App con salida a Internet** | ⚠️ Sí (está en `frontend_net`). Normal si llama a APIs externas; si no, se puede restringir con reglas en `DOCKER-USER` |
 
 ---
@@ -217,25 +261,27 @@ nmap -p 8000,5432 <IP_PUBLICA_VPS>  # ambos filtered/closed
 
 Para [`compose.proxy-app-db.yml`](../compose/compose.proxy-app-db.yml) + [`proxy.conf`](../nginx/proxy.conf). Además de las de la sección anterior (endurecimiento, secretos, BD aislada):
 
+> Con scripts: `./contenedor.sh <proxy> <app> <db>` · `./web.sh -H www.example.com -l /auth/login -b 2 http://127.0.0.1:8081` · `./herramientas.sh nginx ../nginx/proxy.conf`. El resto, a mano.
+
 ```bash
 U=http://127.0.0.1:8081; H='Host: www.example.com'
 code(){ curl -s -o /dev/null -w '%{http_code}\n' "$@"; }
 
 # 1. Filtro de Host: el dominio propio pasa, lo demás se corta (000 = conexión cerrada, 444)
-code -H "$H" $U/                    # 200
-code -H 'Host: evil.com' $U/        # 000
-code $U/                            # 000 (Host = 127.0.0.1)
+code -H "$H" $U/                    # 200   [✅ web.sh -H]
+code -H 'Host: evil.com' $U/        # 000   [✅ web.sh]
+code $U/                            # 000 (Host = 127.0.0.1)   [❌ manual]
 
 # 2. Rutas sensibles: 404 de nginx, sin llegar a la app
-for p in /.git/config /.env /x.sql /backup.bak; do code -H "$H" $U$p; done
+for p in /.git/config /.env /x.sql /backup.bak; do code -H "$H" $U$p; done   # [✅ web.sh, con /backup.sql y /db.sql en vez de /x.sql]
 
 # 3. Rate limit del login: 6 pasan (1 + burst 5), el resto 429
-for i in $(seq 20); do curl -s -o /dev/null -w '%{http_code} ' -H "$H" -X POST $U/auth/login; done; echo
+for i in $(seq 20); do curl -s -o /dev/null -w '%{http_code} ' -H "$H" -X POST $U/auth/login; done; echo   # [✅ web.sh -l; comprueba que hay algún 429, no que sean 6/14]
 
 # 4. Subida mayor que client_max_body_size → 413
-head -c 2000000 /dev/zero | code -H "$H" --data-binary @- $U/
+head -c 2000000 /dev/zero | code -H "$H" --data-binary @- $U/   # [✅ web.sh -b 2]
 
-# 5. IP real: desde el host (gateway) se acepta la cabecera...
+# 5. IP real: desde el host (gateway) se acepta la cabecera...   [❌ manual todo el paso 5]
 curl -s -o /dev/null -H "$H" -H 'X-Real-IP: 203.0.113.7' "$U/?ok"
 # ...desde otro contenedor de la misma red, NO (en el log sale su IP 172.30.80.x, no 6.6.6.6)
 docker run --rm --network mi-app_web alpine wget -qO /dev/null \
@@ -243,23 +289,25 @@ docker run --rm --network mi-app_web alpine wget -qO /dev/null \
 docker compose logs --no-log-prefix proxy | grep -E '\?(ok|spoof)'
 
 # 6. La app no publica puerto y el proxy no ve la BD
-docker compose ps --format '{{.Service}} {{.Ports}}'            # solo proxy con 127.0.0.1
-docker compose exec proxy sh -c 'nc -z -w 2 db 5432 && echo ALCANZABLE || echo "NO alcanzable"'
+docker compose ps --format '{{.Service}} {{.Ports}}'            # solo proxy con 127.0.0.1   [✅ contenedor.sh]
+docker compose exec proxy sh -c 'nc -z -w 2 db 5432 && echo ALCANZABLE || echo "NO alcanzable"'   # [❌ manual]
 
 # 7. Lint de la config de nginx
-docker run --rm -v ./nginx.conf:/etc/nginx/conf.d/default.conf:ro getpagespeed/gixy /etc/nginx/conf.d/default.conf
+docker run --rm -v ./nginx.conf:/etc/nginx/conf.d/default.conf:ro getpagespeed/gixy /etc/nginx/conf.d/default.conf   # [✅ herramientas.sh nginx]
 ```
 
 ### nginx del host (`host-vhost.conf`)
 
+> Con scripts: `./web.sh https://www.example.com` · `./herramientas.sh tls www.example.com` · `./herramientas.sh nginx host-vhost.conf`. El resto, a mano.
+
 ```bash
-nginx -t
-curl -sI  http://www.example.com/            # 301 → https://www.example.com/
-curl -sI  https://example.com/               # 301 → https://www.example.com/
-curl -sI  https://www.example.com/ | grep -ci strict-transport-security   # 1 (ni 0 ni 2)
-curl -skI https://<IP_PUBLICA_VPS>/          # falla el handshake (ssl_reject_handshake)
-curl -sI  http://<IP_PUBLICA_VPS>/           # conexión cerrada (444)
-curl -s --tls-max 1.1 https://www.example.com/   # falla: solo TLS 1.2 y 1.3
+nginx -t                                     # [❌ manual]
+curl -sI  http://www.example.com/            # 301 → https://www.example.com/   [✅ web.sh con URL https://]
+curl -sI  https://example.com/               # 301 → https://www.example.com/   [❌ manual]
+curl -sI  https://www.example.com/ | grep -ci strict-transport-security   # 1 (ni 0 ni 2)   [✅ web.sh]
+curl -skI https://<IP_PUBLICA_VPS>/          # falla el handshake (ssl_reject_handshake)   [❌ manual]
+curl -sI  http://<IP_PUBLICA_VPS>/           # conexión cerrada (444)   [❌ manual]
+curl -s --tls-max 1.1 https://www.example.com/   # falla: solo TLS 1.2 y 1.3   [✅ herramientas.sh tls]
 # Nota externa: https://www.ssllabs.com/ssltest/
 ```
 

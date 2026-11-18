@@ -242,6 +242,7 @@ revisar() {
   case $v in
     healthy) ok "healthcheck: healthy" ;;
     ninguno) aviso "sin healthcheck" ;;
+    starting) aviso "healthcheck: starting (recién arrancado: volver a pasarlo cuando acabe el primer intervalo)" ;;
     *)       fallo "healthcheck: $v" ;;
   esac
 
