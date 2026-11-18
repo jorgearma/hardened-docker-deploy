@@ -279,6 +279,25 @@ secrets:
 | [`compose.proxy-app-db.yml`](compose.proxy-app-db.yml) | nginx + app + PostgreSQL: solo el proxy publica puerto (estructura de panchi-bot) |
 | [`compose.static-tunnel.yml`](compose.static-tunnel.yml) | Web estática + Cloudflare Tunnel en contenedor: sin puertos en el host y sin salida a Internet (estructura del portfolio) |
 
+### Variante: el proxy es tu propio frontend (SPA + API, sin BD)
+
+Caso `siege-map`: un frontend (React/Vite) que nginx sirve **y** que reenvía `/api` al backend. No hace falta otra plantilla: es `compose.proxy-app-db.yml` con tres cambios.
+
+1. **`proxy`: se construye en vez de usar la imagen oficial + `nginx.conf` montado.** El `nginx.conf` va dentro de la imagen ([`Dockerfile.static-build`](../dockerfile/Dockerfile.static-build) ya lo copia).
+   ```yaml
+   proxy:
+     <<: *hardening
+     build:
+       context: ./frontend
+       args:
+         VITE_MAP_KEY: ${MAP_KEY:-}     # SOLO valores públicos: acaban en el JS del navegador
+     image: mi-app-frontend:${TAG:-latest}
+     # sin volumes: ./nginx.conf (va en la imagen)
+   ```
+   En el Dockerfile, `ARG VITE_MAP_KEY` en la etapa de build, antes de `RUN npm run build`. Un `ARG` queda en `docker history`: nunca para secretos (RULE #12).
+2. **Sin BD:** borrar el servicio `db`, la red `backend_net`, el volumen y el `depends_on: db` de `app`.
+3. **Configuración del backend explícita.** No poner `env_file: .env`: compose ya lee `.env` para los `${...}`, y `env_file` lo mete **entero** en el contenedor, incluidas las variables que solo usa compose (build args, `TAG`, puertos). Las ve `docker inspect` y `contenedor.sh` las marca en `#12`. Usar `environment:` variable a variable o, si son muchas, un fichero propio (`env_file: backend.env`) que solo tenga lo del backend. Las claves, en `secrets:`.
+
 ## Patrón web + Cloudflare Tunnel en contenedor
 
 1. Internet → Cloudflare → **túnel propio del proyecto** → **cloudflared** (contenedor, uid 65532).
