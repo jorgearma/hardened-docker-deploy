@@ -16,7 +16,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Primero solo requirements → la capa de dependencias se cachea
 COPY requirements.txt .
-# pip uninstall: la imagen final no lleva pip dentro del venv
+# pip uninstall: el venv no lleva pip (el del sistema se quita en la etapa final)
 RUN pip install -r requirements.txt \
  && pip uninstall -y pip
 
@@ -39,6 +39,12 @@ FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb
 # Trazabilidad: de qué repo sale la imagen (docker inspect / registries la muestran)
 LABEL org.opencontainers.image.title="mi-app" \
       org.opencontainers.image.source="https://github.com/<usuario>/<repo>"
+
+# pip del SISTEMA: la imagen base trae /usr/local/bin/pip aparte del del venv.
+# Sin esto, "python -m pip" dice "No module named pip" (python del venv) pero
+# /usr/local/bin/pip sigue funcionando: un atacante podría instalar paquetes
+# en cualquier carpeta escribible (pip install --target). Antes del ENV PATH y del USER.
+RUN /usr/local/bin/python -m pip uninstall -y pip
 
 # PYTHONDONTWRITEBYTECODE: no intenta escribir .pyc (el FS es read-only)
 # PYTHONUNBUFFERED: logs al momento en docker logs

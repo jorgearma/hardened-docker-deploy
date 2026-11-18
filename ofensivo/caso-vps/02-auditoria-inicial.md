@@ -322,6 +322,7 @@ NoNewPrivs:    0
 El daemon aplica AppArmor y seccomp por defecto, pero no `no-new-privileges`: un contenedor lanzado sin la opción arranca con `NoNewPrivs: 0` y un binario SUID dentro puede subir a root. El del portfolio da `1` porque la lleva su compose.
 
 **Fuera del alcance de este caso, pero relevante:** en el mismo VPS corren otros proyectos (4 contenedores sin límite de CPU, varios sin healthcheck). Un DoS o un compromiso en cualquiera de ellos afecta al host compartido y, por tanto, a la disponibilidad del portfolio.
+> *Actualización 2026-11-18:* radar se revisó y corrigió (límite de CPU y healthcheck, entre otros) → H-12 a H-18 en [`03-hallazgos.md`](03-hallazgos.md).
 
 ## Recuento
 
@@ -378,6 +379,8 @@ Un único túnel, servido por el `cloudflared` del host, publica **todos** los p
 - La remediación de H-07/H-11 no puede apagar el `cloudflared` del host sin cortar los demás proyectos → **un túnel por proyecto**, empezando por el portfolio.
 
 ### Observaciones fuera del alcance (para un segundo caso)
+
+> *Actualización 2026-11-18:* el alcance se amplió a **radar**; sus hallazgos están en [`03-hallazgos.md`](03-hallazgos.md) (H-12 a H-18, y "También en radar" en H-03/04/05/07/11). `radar` sin login es H-13.
 
 - **`radar` sin login:** muestra las IPs de los visitantes del portfolio con el último octeto oculto (`a.b.c.xxx`). Mitigación razonable en pantalla. Pendiente comprobar que la API tampoco devuelve la IP completa (si el enmascarado se hace solo en el frontend, la IP entera viaja en el JSON).
 - **`ad-lab` sin login:** web estática (descripción del laboratorio). Riesgo bajo.

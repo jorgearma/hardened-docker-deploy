@@ -218,7 +218,7 @@ Regla: **cada cosa que se adapta lleva un comentario con el porqué** encima. Si
 - `tini` no va en el Dockerfile: se activa con `init: true` en el compose (Docker trae su propio init). Comprobado: PID 1 = `docker-init`.
 - `--bind 0.0.0.0` es **dentro** del contenedor; desde fuera solo se publica en `127.0.0.1` (compose).
 - Workers: punto de partida `2 × núcleos + 1`, ajustar mirando `docker stats` y el `mem_limit`.
-- Queda el `pip` del sistema (`/usr/local/bin/pip`) de la imagen base. Con FS read-only y `/tmp` noexec su utilidad para un atacante es baja.
+- La imagen base trae **dos** `pip`: el del venv (se quita en la etapa 1) y el del sistema (`/usr/local/bin/pip`, se quita en la etapa final con `/usr/local/bin/python -m pip uninstall -y pip`). Antes solo se quitaba el del venv y `python -m pip` daba un falso "No module named pip" porque `python` es el del venv. El del sistema importa sobre todo si hay un volumen escribible y ejecutable (`pip install --target /data …`).
 
 ---
 
