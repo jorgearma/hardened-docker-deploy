@@ -20,6 +20,7 @@ services:
     secrets:                         # OWASP #12 → /run/secrets/<nombre>
       - db_password
       - flask_secret_key
+      - api_key                      # API key de terceros (AbuseIPDB, mapas...): igual que cualquier secreto
 
     read_only: true                  # OWASP #8
     tmpfs:
@@ -104,3 +105,5 @@ secrets:
     file: ./secrets/db_password.txt
   flask_secret_key:
     file: ./secrets/flask_secret_key.txt
+  api_key:                           # se copia del panel del proveedor, no se genera
+    file: ./secrets/api_key.txt

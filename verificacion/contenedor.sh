@@ -312,6 +312,9 @@ revisar() {
   else
     aviso "#4  binarios SUID utilizables: $v"
   fi
+  # El compose solo puede anularlos (no-new-privileges); quitarlos es cosa del build.
+  # Vienen de la imagen base (p. ej. python:*-slim es Debian) y la app no los usa.
+  [ -z "$v" ] || info "#4  quitarlos en el Dockerfile (antes de USER): RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true"
 
   # shellcheck disable=SC2016
   v=$(docker exec "$c" sh -c '
