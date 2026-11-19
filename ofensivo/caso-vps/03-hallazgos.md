@@ -212,7 +212,7 @@ Reiniciar el daemon en una ventana de mantenimiento y comprobar que todos los pr
 
 **Impacto.** Con ejecución dentro, descargar herramientas (`wget` disponible), abrir una reverse shell o usar el VPS contra terceros. Una web estática no necesita iniciar conexiones.
 
-**Remediación.** Red `internal: true` + túnel en el mismo compose. Retest: `wget: bad address` → [`06-retest.md`](06-retest.md).
+**Remediación.** Red `internal: true` + túnel en el mismo compose. Retest: `wget: bad address` → [`04-retest.md`](04-retest.md).
 
 **También en radar (abierto).** El frontend (nginx) está en una red con salida (`[ INFO ] #5 redes: <red>(con salida)`) y no la necesita. A diferencia del portfolio, el **backend sí necesita salida** (geolocalización, AbuseIPDB, lista de nodos Tor), así que no basta con una sola red `internal`: frontend solo en `internal`; backend y cloudflared en `internal` + red con salida.
 

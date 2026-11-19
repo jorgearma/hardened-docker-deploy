@@ -49,8 +49,6 @@ El rechazo lo envía `100.115.x.x` (espacio CGNAT, 100.64.0.0/10) con `ttl=63`, 
 
 SSH:
 
-<!-- TODO: sustituir por la salida real de evidencias/antes/bruto/externo/1-ssh.txt -->
-
 ```text
 $ nmap -Pn -p22 --script ssh-auth-methods <VPS>
 22/tcp open  ssh
@@ -140,10 +138,3 @@ Lo que se ve es el borde de **Cloudflare** (dos IPs anycast), no el VPS. Lo que 
 - El 403 ante un `Host` inventado no prueba el filtro de nginx, porque Cloudflare corta antes. Se valida en la fase 2.
 - **SSH acepta contraseña** además de clave pública: expone el único servicio abierto a fuerza bruta y credential stuffing. Candidato a hallazgo **medio** (H-01).
 - El ICMP *admin-prohibited* lo genera la red desde la que se escaneaba (CGNAT del operador, un salto), no el VPS. Lección: comprobar de dónde viene una respuesta antes de atribuirla al objetivo.
-
-### Pendiente para cerrar la fase
-
-- [x] Identificar el origen del *admin-prohibited*
-- [x] Métodos de autenticación SSH
-- [x] `./herramientas.sh tls <dominio>`
-- [ ] `nmap -sU --top-ports 50`

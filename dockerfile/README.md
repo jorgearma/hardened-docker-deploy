@@ -297,10 +297,6 @@ Flask + gunicorn + workers RQ, con SQL Server y Redis. Mismo esqueleto que [`Doc
 - `msodbcsql18` sin versión fijada: Microsoft retira las versiones antiguas de su repo → fijarla rompería el build.
 - `sqlserver` con `cap_add: [NET_BIND_SERVICE]`: el binario trae esa *file capability* y sin ella el kernel no deja ejecutarlo.
 
-**Pendiente en panchi-bot** (no cumple aún la plantilla):
-- Secretos por `.env` / `env_file` → pasar a `secrets:` ([compose/](../compose/README.md#rule-12--secretos)).
-- Contraseña de Redis en `command: --requirepass ${REDIS_PASSWORD}` → visible en `docker inspect` y en `ps` del host. Mejor un fichero de config/secreto.
-
 ---
 
 ## Preguntas de repaso

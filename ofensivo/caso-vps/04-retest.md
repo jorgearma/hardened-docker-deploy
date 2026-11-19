@@ -1,4 +1,4 @@
-# 6. Retest
+# 4. Retest
 
 Las mismas pruebas de las fases 1 y 2, después de la remediación. Salidas completas en [`evidencias/despues/`](evidencias/despues/).
 

@@ -2,8 +2,6 @@
 
 Fallos reales que me he encontrado desplegando y cómo los resolví.
 
-> Pendiente: pasar aquí los 11 errores de mi plantilla de despliegue.
-
 ## `ulimits.nproc` agota los procesos de todo el host
 
 - **Síntoma:** el contenedor no llega a `healthy`; `docker exec` y el healthcheck fallan con `resource temporarily unavailable`.

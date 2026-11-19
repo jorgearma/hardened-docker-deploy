@@ -206,7 +206,7 @@ $ apt list --upgradable | grep -i cloudflared
 | Permisos del token | ✅ `600 root:root` | |
 | Versión | ✅ 2026.11.0, sin actualizaciones pendientes | `--no-autoupdate` → se actualiza por apt |
 | Usuario del servicio | ⚠️ root (`User=` vacío) | cloudflared no necesita root: si se compromete el proceso que recibe todo el tráfico de Internet, el atacante es root en el host → hallazgo bajo |
-| Rutas del túnel | Pendiente | Configuradas en el panel de Cloudflare (no hay `config.yml`) |
+| Rutas del túnel | Ver "Rutas del túnel" más abajo | Configuradas en el panel de Cloudflare (no hay `config.yml`) |
 
 ## SSH: `sshd -T`
 
@@ -356,13 +356,6 @@ Lista provisional; severidad y CVSS definitivos en [`03-hallazgos.md`](03-hallaz
 **Puntos positivos:** solo SSH expuesto · web solo por el túnel · contenedor con endurecimiento completo · 0 CVEs HIGH/CRITICAL · token del túnel en fichero `600` · grupo `docker` vacío · parches de seguridad de Ubuntu al día.
 
 **Descartados:** ICMP *admin-prohibited* (red de origen) · dockle CIS-DI-0010 (`KEY_SHA512` de la imagen base) · BREACH (estática, sin secretos) · OCSP stapling.
-
-## Pendiente para cerrar la fase
-
-- [ ] Panel de Cloudflare → Zero Trust → Tunnels → Public Hostname: confirmar que solo hay `<dominio>` → `http://localhost:<puerto>`
-- [ ] SSH (aparcado): `journalctl` de intentos fallidos, `passwd -S root`, `/etc/ssh/sshd_config.d/`
-- [ ] Nmap UDP (`-sU --top-ports 50`) y pegar la salida real de `ssh-auth-methods` en la fase 1
-- [ ] Limpiar en el VPS: `sudo docker rmi alpine:latest`
 
 ## Rutas del túnel (panel de Cloudflare)
 
