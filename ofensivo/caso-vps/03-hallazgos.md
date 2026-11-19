@@ -156,7 +156,7 @@ Server: nginx/1.24.0 (Ubuntu)
 
 **Impacto.** Un fallo explotable en cloudflared daría root en el host directamente, sin pasar por el aislamiento de los contenedores, y afectaría a todas las webs a la vez.
 
-**Remediación.** Aplicada para el portfolio: túnel propio en un contenedor (uid 65532, read-only, sin capabilities) → [`05-remediacion.md`](05-remediacion.md). Se cierra al migrar el resto de proyectos y apagar el servicio del host.
+**Remediación.** Aplicada para el portfolio: túnel propio en un contenedor (uid 65532, read-only, sin capabilities). Se cierra al migrar el resto de proyectos y apagar el servicio del host.
 
 **También en radar (abierto).** Evidencia directa del proceso, con el túnel del portfolio ya en contenedor al lado:
 
@@ -212,7 +212,7 @@ Reiniciar el daemon en una ventana de mantenimiento y comprobar que todos los pr
 
 **Impacto.** Con ejecución dentro, descargar herramientas (`wget` disponible), abrir una reverse shell o usar el VPS contra terceros. Una web estática no necesita iniciar conexiones.
 
-**Remediación.** Red `internal: true` + túnel en el mismo compose → [`05-remediacion.md`](05-remediacion.md). Retest: `wget: bad address` → [`06-retest.md`](06-retest.md).
+**Remediación.** Red `internal: true` + túnel en el mismo compose. Retest: `wget: bad address` → [`06-retest.md`](06-retest.md).
 
 **También en radar (abierto).** El frontend (nginx) está en una red con salida (`[ INFO ] #5 redes: <red>(con salida)`) y no la necesita. A diferencia del portfolio, el **backend sí necesita salida** (geolocalización, AbuseIPDB, lista de nodos Tor), así que no basta con una sola red `internal`: frontend solo en `internal`; backend y cloudflared en `internal` + red con salida.
 
