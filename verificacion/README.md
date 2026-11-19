@@ -44,7 +44,9 @@ sudo ./host.sh
 | Permisos sin `read_only` (`docker run --rm … touch`) | ❌ Manual | Los scripts no arrancan contenedores nuevos |
 | Herramientas de build en la imagen (`node`, `npm`, `gcc`, `pip`) | ⚠️ En parte | `contenedor.sh` lista las del contenedor en marcha (incluido el `pip` del sistema); `python -m pip` y `node`/`npm`: manual |
 | Secretos en variables de entorno | ✅ `contenedor.sh` | |
-| Secretos en `/run/secrets` y en `docker history` | ❌ Manual | |
+| Secretos en `docker history` (ENV/ARG con valor, claves PEM, tokens AWS/GitHub/GitLab/Slack) | ✅ `contenedor.sh` | Solo muestra los nombres, no los valores |
+| Permisos en el host de los ficheros montados en `/run/secrets` | ✅ `contenedor.sh` | FALLO si otro usuario del host puede llegar al fichero (444 dentro de `secrets/` 700 = OK) |
+| Que los secretos existan y estén en `/run/secrets` (`ls -la`) | ❌ Manual | |
 | Redes: `internal` o con salida | ⚠️ En parte | `contenedor.sh` solo las lista (`INFO`) |
 | BD sin Internet, BD inalcanzable desde `frontend_net`, proxy → BD | ❌ Manual | |
 | Puertos publicados solo en `127.0.0.1` | ✅ `contenedor.sh`, `host.sh` | |
@@ -219,7 +221,7 @@ docker run --rm --entrypoint sh mi-app:latest -c 'touch /app/x'                 
 # 4. Secretos: en fichero, NO en variables ni en la imagen
 docker compose exec app sh -c 'ls -la /run/secrets/'                  # [❌ manual]
 docker compose exec app sh -c 'env | grep -iE "pass|secret"'          # vacío (GPG_KEY de la imagen python es pública, no cuenta)   [✅ contenedor.sh]
-docker history --no-trunc mi-app:latest | grep -iE 'secret|pass'      # vacío   [❌ manual]
+docker history --no-trunc mi-app:latest | grep -iE 'secret|pass'      # vacío   [✅ contenedor.sh]
 
 # 5. Aislamiento de red
 docker compose exec db sh -c 'wget -q -T 3 -O /dev/null http://example.com && echo SI || echo NO'   # NO (red internal)   [❌ manual; contenedor.sh solo dice si la red es internal]

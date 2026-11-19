@@ -27,6 +27,7 @@ ins() { docker inspect -f "$2" "$1" 2>/dev/null; }
 revisar() {
   local c=$1 st pid uid user capdrop capadd capeff capbnd nnp sec aa v linea nombre valor
   local tmpfs_dirs vol_dirs dirs item d ej_tmp ej_vol noexec nocopia
+  local salida= t red_t comp_t paq_t ro motivo
   titulo "Contenedor: $c"
 
   if [ "$(ins "$c" '{{.State.Running}}')" != true ]; then
@@ -119,6 +120,7 @@ revisar() {
       v="$v $nombre(internal)"
     else
       v="$v $nombre(con salida)"
+      salida=1
     fi
   done
   info "#5  redes:${v:- ninguna}"
@@ -217,6 +219,58 @@ revisar() {
   else
     fallo "#12 posibles secretos en variables de entorno (se ven con docker inspect):$v"
   fi
+
+  # #12 Secretos en las capas de la imagen: ENV/ARG con valor y build-args de RUN quedan en
+  # "docker history" aunque el compose no los pase. Solo se muestran los nombres, no los valores.
+  v=$(docker history --no-trunc --format '{{.CreatedBy}}' "$(ins "$c" '{{.Image}}')" 2>/dev/null)
+  if [ -z "$v" ]; then
+    manual "#12 no se pudo leer docker history de la imagen: secretos en capas sin comprobar"
+  else
+    nombre=$(grep -oE '(^|[[:space:]|])[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+' <<<"$v" |
+      sed 's/^[[:space:]|]*//' |
+      awk -F= '$1 ~ /PASS|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|CREDENTIAL/ &&
+               $1 !~ /_FILE$/ && $1 != "GPG_KEY" && $2 !~ "^/run/secrets/" { print $1 }' |
+      sort -u | tr '\n' ' ')
+    # Formatos de clave conocidos, aunque no vayan en una variable
+    grep -qE -- '-----BEGIN [A-Z ]*PRIVATE KEY' <<<"$v" && nombre="${nombre}clave-privada-PEM "
+    grep -qE 'AKIA[0-9A-Z]{16}' <<<"$v" && nombre="${nombre}clave-AWS "
+    grep -qE 'gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}' <<<"$v" && nombre="${nombre}token-GitHub "
+    grep -qE 'glpat-[A-Za-z0-9_-]{20}' <<<"$v" && nombre="${nombre}token-GitLab "
+    grep -qE 'xox[baprs]-[A-Za-z0-9-]{10,}' <<<"$v" && nombre="${nombre}token-Slack "
+    if [ -z "$nombre" ]; then
+      ok "#12 ningún secreto a la vista en las capas de la imagen (docker history)"
+    else
+      fallo "#12 posibles secretos dentro de la imagen: ${nombre}(docker history --no-trunc; usar RUN --mount=type=secret)"
+    fi
+  fi
+
+  # #12 Ficheros de secretos (compose sin Swarm = bind mount): el contenido está en el host.
+  # Basta con que otro usuario no pueda llegar a él: fichero 444 dentro de secrets/ 700 es
+  # correcto (el uid del contenedor necesita leerlo). Expuesto = fichero legible por "otros"
+  # Y todos los directorios de la ruta atravesables por "otros".
+  while IFS= read -r linea; do
+    [ -n "$linea" ] || continue
+    d=${linea%% *}
+    if ! valor=$(stat -c '%a' "$d" 2>/dev/null); then
+      manual "#12 secreto $d: no se pudo leer sus permisos (¿ejecutar con sudo?)"
+      continue
+    fi
+    item=
+    if [ $((0$valor & 4)) -ne 0 ]; then
+      item=$d
+      while [ "$item" != / ]; do
+        item=$(dirname "$item")
+        t=$(stat -c '%a' "$item" 2>/dev/null) || { item=?; break; }
+        [ $((0$t & 1)) -ne 0 ] || break
+      done
+    fi
+    case $item in
+      '') ok "#12 secreto ${linea#* } protegido en el host ($d, $valor: no legible por otros)" ;;
+      /)  fallo "#12 secreto ${linea#* } legible por cualquier usuario del host: $d ($valor; poner su directorio a 700)" ;;
+      \?) manual "#12 secreto ${linea#* }: no se pudo comprobar la ruta $d (¿ejecutar con sudo?)" ;;
+      *)  ok "#12 secreto ${linea#* } protegido en el host ($d, $valor, pero $item no es atravesable por otros)" ;;
+    esac
+  done < <(ins "$c" '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}} {{.Destination}}{{"\n"}}{{end}}{{end}}' | grep ' /run/secrets/')
 
   # ── #13 Imagen ──
   v=$(ins "$c" '{{.Config.Image}}')
@@ -321,7 +375,40 @@ revisar() {
     for t in curl wget nc ncat socat gcc cc make pip apk apt-get git ssh; do
       command -v "$t" >/dev/null 2>&1 && printf "%s " "$t"
     done' 2>/dev/null)
-  info "herramientas disponibles para un atacante: ${v:-ninguna}"
+
+  # La gravedad depende de si el resto del endurecimiento las deja sin uso:
+  #  - red (nc/socat: reverse shell; curl/wget: payloads y exfiltración; "wget -O- | sh"
+  #    no escribe en disco, así que noexec no lo para) → solo sirven con salida a Internet
+  #  - compiladores → siempre sobran en producción
+  #  - gestores de paquetes → solo instalan algo como root o con el rootfs escribible
+  # En Alpine, wget y nc son applets de busybox, y muchos healthchecks usan wget.
+  red_t=; comp_t=; paq_t=
+  for t in $v; do
+    case $t in
+      curl | wget | nc | ncat | socat) red_t="$red_t $t" ;;
+      gcc | cc | make)                 comp_t="$comp_t $t" ;;
+      pip | apk | apt-get)             paq_t="$paq_t $t" ;;
+    esac
+  done
+  ro=$(ins "$c" '{{.HostConfig.ReadonlyRootfs}}')
+  [ -z "$red_t" ] || [ -z "$salida" ] ||
+    aviso "herramientas de red con salida a Internet:$red_t (reverse shell, descarga de payloads, exfiltración)"
+  [ -z "$comp_t" ] ||
+    aviso "compiladores en un contenedor de producción:$comp_t (compilar exploits dentro)"
+  [ -z "$paq_t" ] || { [ "$uid" != 0 ] && [ -n "$uid" ] && [ "$ro" = true ]; } ||
+    aviso "gestor de paquetes utilizable:$paq_t (corre como root o el rootfs es escribible: puede instalar más herramientas)"
+
+  # Lo que queda sin uso práctico sale como INFO, con el motivo
+  motivo=
+  [ -z "$red_t" ] || [ -n "$salida" ] || motivo="$motivo$red_t (red internal)"
+  if [ -n "$paq_t" ] && [ "$uid" != 0 ] && [ -n "$uid" ] && [ "$ro" = true ]; then
+    motivo="$motivo$paq_t (sin root + read-only)"
+  fi
+  if [ -z "$v" ]; then
+    info "herramientas disponibles para un atacante: ninguna"
+  elif [ -n "$motivo" ]; then
+    info "herramientas presentes sin uso práctico:$motivo"
+  fi
 }
 
 for c in "$@"; do
